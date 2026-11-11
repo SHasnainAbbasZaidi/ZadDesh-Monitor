@@ -1,0 +1,10 @@
+version is set by build process
+
+    ○
+    │╲
+    │ ○
+    ○ ░
+    ░    gitleaks
+
+5:54PM INF scan completed in 619ms
+5:54PM INF no leaks found

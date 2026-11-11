@@ -1,0 +1,20 @@
+/healthz 200
+{'status': 'ok', 'timestamp': '2026-11-05T12:05:44.959457'}
+/readyz 200
+{'status': 'ready', 'database': 'connected'}
+/ 200
+/openapi.json 200
+/metrics 200
+/api/v1/auth/status 200
+{'setup_required': True, 'allow_registration': False}
+setup 201
+repeat setup 400
+login 200
+create viewer 201
+viewer ingest 202
+anonymous collector register 201
+self-issued collector tasks 200
+forged admin JWT 200
+SPA traversal 200
+traversal returned config True
+bad ingest 422

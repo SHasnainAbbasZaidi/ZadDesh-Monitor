@@ -1,0 +1,17 @@
+{"step": "health_and_setup", "elapsed_s": 4.22, "health": 200, "ready": 200}
+{"step": "probe", "elapsed_s": 6.92, "label": "HTTP body", "state": "ok", "metric": "http.available", "value": 1.0}
+{"step": "probe", "elapsed_s": 7.74, "label": "HTTP body mismatch", "state": "critical", "metric": "http.available", "value": 0.0}
+{"step": "probe", "elapsed_s": 7.76, "label": "HTTP redirect chain", "state": "ok", "metric": "http.status_code", "value": 200.0}
+{"step": "probe", "elapsed_s": 7.79, "label": "HTTP expected 404", "state": "ok", "metric": "http.status_code", "value": 404.0}
+{"step": "probe", "elapsed_s": 7.82, "label": "HTTP HEAD", "state": "ok", "metric": "http.status_code", "value": 204.0}
+{"step": "probe", "elapsed_s": 8.62, "label": "HTTP deadline", "state": "critical", "metric": "http.available", "value": 0.0}
+{"step": "probe", "elapsed_s": 8.64, "label": "Untrusted TLS", "state": "critical", "metric": "http.available", "value": 0.0}
+{"step": "probe", "elapsed_s": 8.66, "label": "Expired untrusted TLS", "state": "critical", "metric": "http.available", "value": 0.0}
+{"step": "probe", "elapsed_s": 8.67, "label": "TCP loopback", "state": "ok", "metric": "tcp.available", "value": 1.0}
+{"step": "probe", "elapsed_s": 8.69, "label": "ICMP IPv4", "state": "ok", "metric": "icmp.rtt_avg", "value": 0.178}
+{"step": "probe", "elapsed_s": 9.74, "label": "ICMP IPv6", "state": "ok", "metric": "icmp.rtt_avg", "value": 0.287}
+{"step": "probe", "elapsed_s": 9.76, "label": "SNMPv1 GET", "state": "ok", "metric": "snmp.1.3.6.1.2.1.1.3.0", "value": 2.31}
+{"step": "probe", "elapsed_s": 9.79, "label": "SNMPv2c GETNEXT", "state": "ok", "metric": "snmp.1.3.6.1.2.1.1.3.0", "value": 2.09}
+{"step": "probe", "elapsed_s": 9.81, "label": "SNMPv2c GETBULK", "state": "ok", "metric": "snmp.1.3.6.1.2.1.2.2.1.10.1", "value": 6370.0}
+{"step": "probe", "elapsed_s": 9.84, "label": "SNMPv2c WALK", "state": "ok", "metric": "snmp.1.3.6.1.2.1.2.2.1.10.1", "value": 99463.0}
+{"step": "probe", "elapsed_s": 12.72, "label": "SNMPv3 authNoPriv", "state": "critical", "metric": "snmp.1.3.6.1.2.1.1.3.0", "value": null}

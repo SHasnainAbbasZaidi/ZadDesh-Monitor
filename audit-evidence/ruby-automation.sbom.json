@@ -1,0 +1,154 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "components": [
+    {
+      "type": "library",
+      "name": "ast",
+      "version": "2.4.3",
+      "purl": "pkg:gem/ast@2.4.3",
+      "bom-ref": "pkg:gem/ast@2.4.3"
+    },
+    {
+      "type": "library",
+      "name": "diff-lcs",
+      "version": "1.6.2",
+      "purl": "pkg:gem/diff-lcs@1.6.2",
+      "bom-ref": "pkg:gem/diff-lcs@1.6.2"
+    },
+    {
+      "type": "library",
+      "name": "json",
+      "version": "2.21.2",
+      "purl": "pkg:gem/json@2.21.2",
+      "bom-ref": "pkg:gem/json@2.21.2"
+    },
+    {
+      "type": "library",
+      "name": "language_server-protocol",
+      "version": "3.17.0.6",
+      "purl": "pkg:gem/language_server-protocol@3.17.0.6",
+      "bom-ref": "pkg:gem/language_server-protocol@3.17.0.6"
+    },
+    {
+      "type": "library",
+      "name": "lint_roller",
+      "version": "1.1.0",
+      "purl": "pkg:gem/lint_roller@1.1.0",
+      "bom-ref": "pkg:gem/lint_roller@1.1.0"
+    },
+    {
+      "type": "library",
+      "name": "parallel",
+      "version": "1.28.0",
+      "purl": "pkg:gem/parallel@1.28.0",
+      "bom-ref": "pkg:gem/parallel@1.28.0"
+    },
+    {
+      "type": "library",
+      "name": "parser",
+      "version": "3.3.13.0",
+      "purl": "pkg:gem/parser@3.3.13.0",
+      "bom-ref": "pkg:gem/parser@3.3.13.0"
+    },
+    {
+      "type": "library",
+      "name": "prism",
+      "version": "1.9.0",
+      "purl": "pkg:gem/prism@1.9.0",
+      "bom-ref": "pkg:gem/prism@1.9.0"
+    },
+    {
+      "type": "library",
+      "name": "racc",
+      "version": "1.8.1",
+      "purl": "pkg:gem/racc@1.8.1",
+      "bom-ref": "pkg:gem/racc@1.8.1"
+    },
+    {
+      "type": "library",
+      "name": "rainbow",
+      "version": "3.1.1",
+      "purl": "pkg:gem/rainbow@3.1.1",
+      "bom-ref": "pkg:gem/rainbow@3.1.1"
+    },
+    {
+      "type": "library",
+      "name": "regexp_parser",
+      "version": "2.13.1",
+      "purl": "pkg:gem/regexp_parser@2.13.1",
+      "bom-ref": "pkg:gem/regexp_parser@2.13.1"
+    },
+    {
+      "type": "library",
+      "name": "rspec",
+      "version": "3.13.2",
+      "purl": "pkg:gem/rspec@3.13.2",
+      "bom-ref": "pkg:gem/rspec@3.13.2"
+    },
+    {
+      "type": "library",
+      "name": "rspec-core",
+      "version": "3.13.6",
+      "purl": "pkg:gem/rspec-core@3.13.6",
+      "bom-ref": "pkg:gem/rspec-core@3.13.6"
+    },
+    {
+      "type": "library",
+      "name": "rspec-expectations",
+      "version": "3.13.5",
+      "purl": "pkg:gem/rspec-expectations@3.13.5",
+      "bom-ref": "pkg:gem/rspec-expectations@3.13.5"
+    },
+    {
+      "type": "library",
+      "name": "rspec-mocks",
+      "version": "3.13.8",
+      "purl": "pkg:gem/rspec-mocks@3.13.8",
+      "bom-ref": "pkg:gem/rspec-mocks@3.13.8"
+    },
+    {
+      "type": "library",
+      "name": "rspec-support",
+      "version": "3.13.7",
+      "purl": "pkg:gem/rspec-support@3.13.7",
+      "bom-ref": "pkg:gem/rspec-support@3.13.7"
+    },
+    {
+      "type": "library",
+      "name": "rubocop",
+      "version": "1.92.2",
+      "purl": "pkg:gem/rubocop@1.92.2",
+      "bom-ref": "pkg:gem/rubocop@1.92.2"
+    },
+    {
+      "type": "library",
+      "name": "rubocop-ast",
+      "version": "1.50.0",
+      "purl": "pkg:gem/rubocop-ast@1.50.0",
+      "bom-ref": "pkg:gem/rubocop-ast@1.50.0"
+    },
+    {
+      "type": "library",
+      "name": "ruby-progressbar",
+      "version": "1.13.0",
+      "purl": "pkg:gem/ruby-progressbar@1.13.0",
+      "bom-ref": "pkg:gem/ruby-progressbar@1.13.0"
+    },
+    {
+      "type": "library",
+      "name": "unicode-display_width",
+      "version": "3.3.0",
+      "purl": "pkg:gem/unicode-display_width@3.3.0",
+      "bom-ref": "pkg:gem/unicode-display_width@3.3.0"
+    },
+    {
+      "type": "library",
+      "name": "unicode-emoji",
+      "version": "4.3.0",
+      "purl": "pkg:gem/unicode-emoji@4.3.0",
+      "bom-ref": "pkg:gem/unicode-emoji@4.3.0"
+    }
+  ]
+}

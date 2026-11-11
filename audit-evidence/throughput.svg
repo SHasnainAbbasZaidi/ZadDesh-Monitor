@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 740 242" role="img" aria-labelledby="title">
+<title id="title">Measured synthetic API ingest throughput in rows per second</title>
+<rect width="740" height="242" rx="12" fill="#f5f8fc"/>
+<g font-family="system-ui,sans-serif" font-size="13" fill="#14253b">
+<text x="12" y="25" font-size="17" font-weight="bold">Synthetic ingestion throughput · rows/s</text>
+<text x="12" y="48">5,000 devices, 50,000 checks; one sample per check per round</text>
+<text x="12" y="82">Pre-tune initial</text><rect x="225" y="68" width="74.0" height="19" rx="3" fill="#ba4a58"/><text x="307.0" y="82">813.3</text><text x="12" y="119">Pre-tune steady</text><rect x="225" y="105" width="433.5" height="19" rx="3" fill="#24728d"/><text x="666.5" y="119">4,763.9</text><text x="12" y="156">Tuned initial</text><rect x="225" y="142" width="176.5" height="19" rx="3" fill="#24728d"/><text x="409.5" y="156">1,939.9</text><text x="12" y="193">Tuned, host contention</text><rect x="225" y="179" width="74.4" height="19" rx="3" fill="#ba4a58"/><text x="307.4" y="193">818.1</text>
+<path d="M 300.8 60 V 211" stroke="#182843" stroke-width="2" stroke-dasharray="4 3"/>
+<text x="307.8" y="224">833.3/s required at one sample per check</text>
+</g></svg>

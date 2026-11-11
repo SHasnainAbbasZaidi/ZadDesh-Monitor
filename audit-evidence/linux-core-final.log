@@ -1,0 +1,100 @@
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 0001_initial_schema, initial schema
+INFO  [alembic.runtime.migration] Running upgrade 0001_initial_schema -> 0002_metric_fingerprint, Add a unique key for retry-safe metric ingestion.
+INFO  [alembic.runtime.migration] Running upgrade 0002_metric_fingerprint -> 0003_query_indexes, Align database indexes with the ORM and index check joins.
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.plugins] setting up autogenerate plugin alembic.autogenerate.schemas
+INFO  [alembic.runtime.plugins] setting up autogenerate plugin alembic.autogenerate.tables
+INFO  [alembic.runtime.plugins] setting up autogenerate plugin alembic.autogenerate.types
+INFO  [alembic.runtime.plugins] setting up autogenerate plugin alembic.autogenerate.constraints
+INFO  [alembic.runtime.plugins] setting up autogenerate plugin alembic.autogenerate.defaults
+INFO  [alembic.runtime.plugins] setting up autogenerate plugin alembic.autogenerate.comments
+No new upgrade operations detected.
+All checks passed!
+zaddesh_core/seed.py:33: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+Success: no issues found in 32 source files
+/home/hasnain/.local/share/zaddesh-audit-venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+.................                                                        [100%]
+=============================== warnings summary ===============================
+../../../../../home/hasnain/.local/share/zaddesh-audit-venv/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /home/hasnain/.local/share/zaddesh-audit-venv/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+tests/test_auth.py: 12 warnings
+tests/test_devices.py: 5 warnings
+tests/test_metrics.py: 17 warnings
+tests/test_security_regressions.py: 6 warnings
+  /home/hasnain/.local/share/zaddesh-audit-venv/lib/python3.12/site-packages/sqlalchemy/sql/schema.py:4362: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return util.wrap_callable(lambda ctx: fn(), fn)  # type: ignore[call-arg, no-any-return, no-untyped-call]  # noqa: E501
+
+tests/test_auth.py::test_create_and_use_api_token
+  /mnt/e/ProjectsBuildbyAI/ZadDesh Monitoring/core/zaddesh_core/api/v1/auth.py:161: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    expires_at = datetime.datetime.utcnow() + datetime.timedelta(days=payload.expires_in_days)
+
+tests/test_auth.py::test_create_and_use_api_token
+  /mnt/e/ProjectsBuildbyAI/ZadDesh Monitoring/core/zaddesh_core/api/deps.py:45: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    if api_token.expires_at and api_token.expires_at < datetime.datetime.utcnow():
+
+tests/test_auth.py::test_create_and_use_api_token
+  /mnt/e/ProjectsBuildbyAI/ZadDesh Monitoring/core/zaddesh_core/api/deps.py:51: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    api_token.last_used_at = datetime.datetime.utcnow()
+
+tests/test_metrics.py::test_metric_ingest_and_query
+  /mnt/e/ProjectsBuildbyAI/ZadDesh Monitoring/core/tests/test_metrics.py:26: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.datetime.utcnow()
+
+tests/test_security_regressions.py::test_registration_requires_enrollment_and_cannot_replace_key
+tests/test_security_regressions.py::test_registration_requires_enrollment_and_cannot_replace_key
+  /mnt/e/ProjectsBuildbyAI/ZadDesh Monitoring/core/zaddesh_core/api/v1/collectors.py:46: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.datetime.utcnow()
+
+tests/test_security_regressions.py::test_spa_never_serves_files_outside_dist
+  /mnt/e/ProjectsBuildbyAI/ZadDesh Monitoring/core/zaddesh_core/api/v1/system.py:25: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return {"status": "ok", "timestamp": datetime.datetime.utcnow().isoformat()}
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.12.3-final-0 ________________
+
+Name                                    Stmts   Miss  Cover
+-----------------------------------------------------------
+zaddesh_core/__init__.py                    1      0   100%
+zaddesh_core/api/__init__.py                2      0   100%
+zaddesh_core/api/deps.py                   64      7    89%
+zaddesh_core/api/v1/__init__.py            19      0   100%
+zaddesh_core/api/v1/alerts.py              63     38    40%
+zaddesh_core/api/v1/auth.py                82     27    67%
+zaddesh_core/api/v1/checks.py              91     37    59%
+zaddesh_core/api/v1/collectors.py          65     23    65%
+zaddesh_core/api/v1/devices.py            115     38    67%
+zaddesh_core/api/v1/metrics.py            115     11    90%
+zaddesh_core/api/v1/stream.py              48     26    46%
+zaddesh_core/api/v1/system.py              43     19    56%
+zaddesh_core/config.py                     79      5    94%
+zaddesh_core/database.py                   26      4    85%
+zaddesh_core/main.py                       75      7    91%
+zaddesh_core/models/__init__.py             9      0   100%
+zaddesh_core/models/alerts.py              78      0   100%
+zaddesh_core/models/auth.py                52      0   100%
+zaddesh_core/models/checks.py              46      0   100%
+zaddesh_core/models/infrastructure.py      71      0   100%
+zaddesh_core/models/metrics.py             69      0   100%
+zaddesh_core/models/snmp.py                20      0   100%
+zaddesh_core/models/system.py              48      0   100%
+zaddesh_core/schemas/__init__.py            7      0   100%
+zaddesh_core/schemas/alert.py              30      0   100%
+zaddesh_core/schemas/auth.py               57      0   100%
+zaddesh_core/schemas/check.py              54      0   100%
+zaddesh_core/schemas/device.py             73      0   100%
+zaddesh_core/schemas/metric.py             31      0   100%
+zaddesh_core/schemas/system.py             35      0   100%
+zaddesh_core/security.py                   67     22    67%
+zaddesh_core/seed.py                      112    112     0%
+-----------------------------------------------------------
+TOTAL                                    1747    376    78%
+17 passed, 48 warnings in 7.70s

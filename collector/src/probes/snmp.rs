@@ -1,0 +1,281 @@
+use crate::types::{CheckTask, MetricPoint, ProbeResult, ProbeStatus};
+use chrono::Utc;
+use snmp2::{v3, AsyncSession, Oid, Pdu, Value};
+use std::collections::HashMap;
+use std::time::Duration;
+
+type Reading = (String, f64, &'static str);
+type ProbeError = &'static str;
+type Binding = (String, Option<Reading>);
+
+fn param<'a>(task: &'a CheckTask, name: &str, default: &'a str) -> &'a str {
+    task.params
+        .get(name)
+        .and_then(|value| value.as_str())
+        .unwrap_or(default)
+}
+
+fn secret(task: &CheckTask, name: &str) -> Result<String, ProbeError> {
+    let value = if let Some(credentials) = &task.snmp_credentials {
+        match name {
+            "COMMUNITY" => credentials.community.clone(),
+            "USERNAME" => credentials.username.clone(),
+            "AUTH_PASSWORD" => credentials.auth_password.clone(),
+            "PRIV_PASSWORD" => credentials.priv_password.clone(),
+            _ => None,
+        }
+    } else {
+        let alias = param(task, "credential", "");
+        if alias.is_empty()
+            || alias.len() > 48
+            || !alias
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'_')
+        {
+            return Err("SNMP credential alias is required");
+        }
+        std::env::var(format!(
+            "ZADDESH_SNMP_{}_{name}",
+            alias.to_ascii_uppercase()
+        ))
+        .ok()
+    };
+    value
+        .filter(|value| !value.is_empty() && value.len() <= 255)
+        .ok_or("SNMP credential is missing or invalid")
+}
+
+fn security(task: &CheckTask) -> Result<v3::Security, ProbeError> {
+    let username = secret(task, "USERNAME")?;
+    let level = param(task, "security_level", "authPriv");
+    let password = if level == "noAuthNoPriv" {
+        String::new()
+    } else {
+        secret(task, "AUTH_PASSWORD")?
+    };
+    let protocol = match param(task, "auth_protocol", "sha256") {
+        "md5" => v3::AuthProtocol::Md5,
+        "sha1" => v3::AuthProtocol::Sha1,
+        "sha224" => v3::AuthProtocol::Sha224,
+        "sha256" => v3::AuthProtocol::Sha256,
+        "sha384" => v3::AuthProtocol::Sha384,
+        "sha512" => v3::AuthProtocol::Sha512,
+        _ => return Err("Unsupported SNMP authentication protocol"),
+    };
+    let auth = match level {
+        "noAuthNoPriv" => v3::Auth::NoAuthNoPriv,
+        "authNoPriv" => v3::Auth::AuthNoPriv,
+        "authPriv" => {
+            let cipher = match param(task, "privacy_protocol", "aes128") {
+                "des" => v3::Cipher::Des,
+                "aes128" => v3::Cipher::Aes128,
+                "aes192" => v3::Cipher::Aes192,
+                "aes256" => v3::Cipher::Aes256,
+                _ => return Err("Unsupported SNMP privacy protocol"),
+            };
+            let privacy_password = secret(task, "PRIV_PASSWORD")?.into_bytes();
+            if privacy_password.len() < 8 {
+                return Err("SNMP privacy password is too short");
+            }
+            v3::Auth::AuthPriv {
+                cipher,
+                privacy_password,
+            }
+        }
+        _ => return Err("Unsupported SNMP security level"),
+    };
+    if level != "noAuthNoPriv" && password.len() < 8 {
+        return Err("SNMP authentication password is too short");
+    }
+    Ok(v3::Security::new(username.as_bytes(), password.as_bytes())
+        .with_context_name(param(task, "context_name", ""))
+        .with_auth_protocol(protocol)
+        .with_auth(auth))
+}
+
+fn oid(input: &str) -> Result<Oid<'static>, ProbeError> {
+    let input = input.strip_prefix('.').unwrap_or(input);
+    let numbers: Vec<u64> = input
+        .split('.')
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .map_err(|_| "Invalid numeric SNMP OID")?;
+    if !(2..=64).contains(&numbers.len()) {
+        return Err("Invalid numeric SNMP OID length");
+    }
+    Oid::from(&numbers)
+        .map(|value| value.to_owned())
+        .map_err(|_| "Invalid numeric SNMP OID")
+}
+
+fn numeric(value: Value<'_>) -> Option<(f64, &'static str)> {
+    Some(match value {
+        Value::Boolean(value) => (if value { 1.0 } else { 0.0 }, "boolean"),
+        Value::Integer(value) => (value as f64, "integer"),
+        Value::Unsigned32(value) => (f64::from(value), "unsigned32"),
+        Value::Timeticks(value) => (f64::from(value) / 100.0, "seconds"),
+        Value::Counter32(value) => (f64::from(value), "counter32"),
+        Value::Counter64(value) => (value as f64, "counter64"),
+        _ => return None,
+    })
+}
+
+fn decode(pdu: Pdu<'_>) -> Result<Vec<Binding>, ProbeError> {
+    if pdu.error_status != 0 {
+        return Err("SNMP agent returned an error");
+    }
+    Ok(pdu
+        .varbinds
+        .filter_map(|(oid, value)| {
+            if matches!(
+                value,
+                Value::EndOfMibView | Value::NoSuchObject | Value::NoSuchInstance
+            ) {
+                return None;
+            }
+            let name = oid.to_string().trim_start_matches('.').to_string();
+            let reading = numeric(value).map(|(value, unit)| (name.clone(), value, unit));
+            Some((name, reading))
+        })
+        .collect())
+}
+
+async fn request(
+    session: &mut AsyncSession,
+    oid: &Oid<'_>,
+    operation: &str,
+    max_repetitions: u32,
+) -> Result<Vec<Binding>, ProbeError> {
+    for _ in 0..3 {
+        let response = match operation {
+            "get" => session.get(oid).await,
+            "getnext" | "walk" => session.getnext(oid).await,
+            "getbulk" => session.getbulk(&[oid], 0, max_repetitions).await,
+            _ => return Err("Unsupported SNMP operation"),
+        };
+        match response {
+            Ok(pdu) => return decode(pdu),
+            Err(snmp2::Error::AuthUpdated) => continue,
+            Err(_) => return Err("SNMP request failed"),
+        }
+    }
+    Err("SNMP session could not synchronize")
+}
+
+async fn collect(task: &CheckTask) -> Result<Vec<Reading>, ProbeError> {
+    let version = param(task, "version", "3");
+    let operation = param(task, "operation", "get");
+    if version == "1" && operation == "getbulk" {
+        return Err("GETBULK requires SNMPv2c or SNMPv3");
+    }
+    let port = task
+        .params
+        .get("port")
+        .and_then(|value| value.as_u64())
+        .and_then(|port| u16::try_from(port).ok())
+        .filter(|port| *port != 0)
+        .unwrap_or(161);
+    let address = (task.target.as_str(), port);
+    let req_id = (rand::random::<u32>() & 0x3fff_ffff) as i32;
+    let mut session = match version {
+        "1" => AsyncSession::new_v1(address, secret(task, "COMMUNITY")?.as_bytes(), req_id).await,
+        "2c" => AsyncSession::new_v2c(address, secret(task, "COMMUNITY")?.as_bytes(), req_id).await,
+        "3" => AsyncSession::new_v3(address, req_id, security(task)?).await,
+        _ => return Err("Unsupported SNMP version"),
+    }
+    .map_err(|_| "Could not open SNMP session")?;
+    if version == "3" {
+        session
+            .init()
+            .await
+            .map_err(|_| "SNMP engine discovery failed")?;
+    }
+    let root = oid(param(task, "oid", "1.3.6.1.2.1.1.3.0"))?;
+    let max_repetitions = task
+        .params
+        .get("max_repetitions")
+        .and_then(|value| value.as_u64())
+        .filter(|count| (1..=64).contains(count))
+        .unwrap_or(16) as u32;
+    if operation != "walk" {
+        let bindings = request(&mut session, &root, operation, max_repetitions).await?;
+        if bindings.is_empty() {
+            return Err("SNMP object not returned by agent");
+        }
+        return Ok(bindings
+            .into_iter()
+            .filter_map(|(_, value)| value)
+            .collect());
+    }
+    let prefix = format!("{}.", root.to_string().trim_start_matches('.'));
+    let mut current = root;
+    let mut readings = Vec::new();
+    let mut found = false;
+    for _ in 0..64 {
+        let Some((next, value)) = request(&mut session, &current, operation, max_repetitions)
+            .await?
+            .into_iter()
+            .next()
+        else {
+            break;
+        };
+        if !next.starts_with(&prefix) || next == current.to_string().trim_start_matches('.') {
+            break;
+        }
+        found = true;
+        readings.extend(value);
+        current = oid(&next)?;
+    }
+    if !found {
+        return Err("SNMP subtree not returned by agent");
+    }
+    Ok(readings)
+}
+
+pub async fn probe_snmp(task: &CheckTask) -> ProbeResult {
+    let readings = tokio::time::timeout(
+        Duration::from_secs(task.timeout_seconds.max(1)),
+        collect(task),
+    )
+    .await
+    .unwrap_or(Err("SNMP deadline exceeded"));
+    let timestamp = Utc::now();
+    let point = |metric_key, value, tags| MetricPoint {
+        device_id: task.device_id,
+        check_id: Some(task.check_id),
+        metric_key,
+        timestamp,
+        value,
+        tags,
+    };
+    let reason = readings
+        .as_ref()
+        .err()
+        .map(|error| HashMap::from([("reason".to_string(), error.to_string())]))
+        .unwrap_or_default();
+    let mut metrics = vec![point(
+        "snmp.available".into(),
+        if readings.is_ok() { 1.0 } else { 0.0 },
+        reason,
+    )];
+    let (status, message) = match readings {
+        Ok(values) => {
+            for (oid, value, unit) in values.into_iter().filter(|(oid, _, _)| oid.len() <= 123) {
+                metrics.push(point(
+                    format!("snmp.{oid}"),
+                    value,
+                    HashMap::from([("unit".into(), unit.into())]),
+                ));
+            }
+            (ProbeStatus::Ok, "SNMP probe succeeded")
+        }
+        Err(error) => (ProbeStatus::Critical, error),
+    };
+    ProbeResult {
+        check_id: task.check_id,
+        device_id: task.device_id,
+        status,
+        metrics,
+        message: message.into(),
+    }
+}

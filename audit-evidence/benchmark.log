@@ -1,0 +1,10 @@
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 0001_initial_schema, initial schema
+INFO:     Started server process [19472]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:18766 (Press CTRL+C to quit)
+{"devices": 5000, "checks": 50000, "rounds": 2, "interval_seconds": 60.0, "batch_size": 1000}
+{"round": 1, "seconds": 61.48, "rows_per_second": 813.3, "batch_p95_ms": 2224.06, "query_p95_ms": 10.04, "rows": 50000}
+{"round": 2, "seconds": 10.5, "rows_per_second": 4763.9, "batch_p95_ms": 395.11, "query_p95_ms": 6.61, "rows": 100000}

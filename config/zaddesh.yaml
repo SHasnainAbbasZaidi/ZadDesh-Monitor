@@ -1,0 +1,36 @@
+server:
+  host: "127.0.0.1"
+  port: 8000
+  base_url: "http://localhost:8000"
+  workers: 1
+  cors_origins:
+    - "http://localhost:5173"
+    - "http://127.0.0.1:5173"
+    - "http://localhost:8000"
+
+database:
+  url: "sqlite:///./zaddesh-live.db"
+  echo: false
+  pool_size: 20
+  max_overflow: 10
+
+security:
+  jwt_algorithm: "HS256"
+  jwt_expiration_minutes: 60
+  allow_registration: false
+
+collector:
+  batch_size: 1000
+  flush_interval_seconds: 5
+
+retention:
+  raw_days: 14
+  rollup_1m_days: 30
+  rollup_5m_days: 180
+  rollup_1h_days: 730
+  rollup_1d_days: 1825
+
+logging:
+  level: "INFO"
+  format: "json"
+

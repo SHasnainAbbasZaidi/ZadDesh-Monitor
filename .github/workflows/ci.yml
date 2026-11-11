@@ -1,0 +1,75 @@
+name: ZadDesh checks
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      ZADDESH_DATABASE__URL: sqlite:///./ci-zaddesh.db
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: web
+      - name: Verify web
+        run: |
+          npm run build
+          npm run lint
+          npm test
+        working-directory: web
+      - name: Install core
+        run: python -m pip install -e "./core[dev]"
+      - name: Verify core
+        run: |
+          python -m alembic upgrade head
+          python -m alembic check
+          ruff check .
+          python -m mypy zaddesh_core
+          python -m pytest --cov=zaddesh_core
+        working-directory: core
+      - name: Install Chromium
+        run: npx playwright install chromium
+        working-directory: web
+      - name: Browser acceptance
+        run: python scripts/audit/browser.py --db ci-browser.db
+      - name: Set up Rust checks
+        run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+      - name: Verify collector
+        run: |
+          cargo +stable fmt --check
+          cargo +stable clippy --locked --all-targets -- -D warnings
+          cargo +stable test --locked
+          cargo +stable build --release --locked
+        working-directory: collector
+
+  ruby-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          working-directory: automation
+          bundler-cache: true
+      - name: Verify Ruby rules
+        run: |
+          bundle exec rspec
+          bundle exec rubocop
+        working-directory: automation

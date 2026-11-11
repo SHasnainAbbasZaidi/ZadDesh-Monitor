@@ -1,0 +1,27 @@
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 0001_initial_schema, initial schema
+INFO  [alembic.runtime.migration] Running upgrade 0001_initial_schema -> 0002_metric_fingerprint, Add a unique key for retry-safe metric ingestion.
+INFO  [alembic.runtime.migration] Running upgrade 0002_metric_fingerprint -> 0003_query_indexes, Align database indexes with the ORM and index check joins.
+
+> zaddesh-web@0.1.0 test:e2e
+> playwright test --reporter=list
+
+
+Running 3 tests using 1 worker
+
+(node:9244) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+{"viewport":390,"firstChartMs":2992,"incidentMs":120,"recoveryMs":73}
+  ok 1 e2e\monitoring.spec.ts:15:3 › local HTTP target → chart → incident → acknowledgement → recovery at 390px (4.6s)
+{"viewport":768,"firstChartMs":1470,"incidentMs":110,"recoveryMs":61}
+  ok 2 e2e\monitoring.spec.ts:15:3 › local HTTP target → chart → incident → acknowledgement → recovery at 768px (2.9s)
+{"viewport":1440,"firstChartMs":1315,"incidentMs":131,"recoveryMs":53}
+  ok 3 e2e\monitoring.spec.ts:15:3 › local HTTP target → chart → incident → acknowledgement → recovery at 1440px (7.3s)
+
+  3 passed (17.7s)
+npm notice
+npm notice New minor version of npm available! 11.19.1 -> 11.21.2
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.21.2
+npm notice To update run: npm install -g npm@11.21.2
+npm notice
