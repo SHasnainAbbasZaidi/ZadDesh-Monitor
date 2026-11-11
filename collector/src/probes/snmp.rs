@@ -1,7 +1,7 @@
 use crate::types::{CheckTask, MetricPoint, ProbeResult, ProbeStatus};
 use chrono::Utc;
 use snmp2::{v3, AsyncSession, Oid, Pdu, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 type Reading = (String, f64, &'static str);
@@ -162,12 +162,8 @@ async fn request(
     Err("SNMP session could not synchronize")
 }
 
-async fn collect(task: &CheckTask) -> Result<Vec<Reading>, ProbeError> {
+async fn open_session(task: &CheckTask) -> Result<AsyncSession, ProbeError> {
     let version = param(task, "version", "3");
-    let operation = param(task, "operation", "get");
-    if version == "1" && operation == "getbulk" {
-        return Err("GETBULK requires SNMPv2c or SNMPv3");
-    }
     let port = task
         .params
         .get("port")
@@ -190,6 +186,16 @@ async fn collect(task: &CheckTask) -> Result<Vec<Reading>, ProbeError> {
             .await
             .map_err(|_| "SNMP engine discovery failed")?;
     }
+    Ok(session)
+}
+
+async fn collect(task: &CheckTask) -> Result<Vec<Reading>, ProbeError> {
+    let version = param(task, "version", "3");
+    let operation = param(task, "operation", "get");
+    if version == "1" && operation == "getbulk" {
+        return Err("GETBULK requires SNMPv2c or SNMPv3");
+    }
+    let mut session = open_session(task).await?;
     let root = oid(param(task, "oid", "1.3.6.1.2.1.1.3.0"))?;
     let max_repetitions = task
         .params
@@ -230,6 +236,118 @@ async fn collect(task: &CheckTask) -> Result<Vec<Reading>, ProbeError> {
         return Err("SNMP subtree not returned by agent");
     }
     Ok(readings)
+}
+
+const TOPOLOGY_ROOTS: &[&str] = &[
+    "1.3.6.1.2.1.1",                // system
+    "1.3.6.1.2.1.2.2.1.2",          // ifDescr
+    "1.3.6.1.2.1.2.2.1.5",          // ifSpeed
+    "1.3.6.1.2.1.2.2.1.8",          // ifOperStatus
+    "1.3.6.1.2.1.31.1.1.1.1",       // ifName
+    "1.3.6.1.2.1.31.1.1.1.6",       // ifHCInOctets
+    "1.3.6.1.2.1.31.1.1.1.10",      // ifHCOutOctets
+    "1.3.6.1.2.1.31.1.1.1.15",      // ifHighSpeed
+    "1.0.8802.1.1.2.1.3.7.1.3",     // LLDP local port ID
+    "1.0.8802.1.1.2.1.4.1.1.5",     // LLDP remote chassis ID
+    "1.0.8802.1.1.2.1.4.1.1.7",     // LLDP remote port ID
+    "1.0.8802.1.1.2.1.4.1.1.9",     // LLDP remote system name
+    "1.3.6.1.4.1.9.9.23.1.2.1.1.6", // CDP remote device
+    "1.3.6.1.4.1.9.9.23.1.2.1.1.7", // CDP remote port
+    "1.3.6.1.2.1.17.4.3",           // bridge forwarding database
+    "1.3.6.1.2.1.17.7.1.2.2",       // VLAN forwarding database
+    "1.3.6.1.2.1.4.22",             // ARP
+    "1.3.6.1.2.1.4.21",             // routes
+];
+
+fn topology_value(value: Value<'_>) -> Option<String> {
+    match value {
+        Value::OctetString(bytes) if bytes.iter().all(|byte| !byte.is_ascii_control()) => {
+            Some(String::from_utf8_lossy(bytes).chars().take(120).collect())
+        }
+        Value::OctetString(bytes) => Some(
+            bytes
+                .iter()
+                .take(32)
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<Vec<_>>()
+                .join(":"),
+        ),
+        Value::Integer(value) => Some(value.to_string()),
+        Value::Counter64(value) => Some(value.to_string()),
+        Value::Counter32(value) | Value::Unsigned32(value) | Value::Timeticks(value) => {
+            Some(value.to_string())
+        }
+        Value::ObjectIdentifier(value) => Some(value.to_string()),
+        Value::IpAddress(value) => Some(std::net::Ipv4Addr::from(value).to_string()),
+        _ => None,
+    }
+}
+
+pub async fn discover_topology(task: &CheckTask) -> Result<BTreeMap<String, String>, &'static str> {
+    if param(task, "version", "") != "3"
+        || !matches!(
+            param(task, "security_level", "authPriv"),
+            "authPriv" | "authNoPriv"
+        )
+    {
+        return Err("Discovery requires authenticated SNMPv3");
+    }
+    let mut session = tokio::time::timeout(Duration::from_secs(5), open_session(task))
+        .await
+        .map_err(|_| "SNMPv3 session timed out")??;
+    let mut values = BTreeMap::new();
+    for root in TOPOLOGY_ROOTS {
+        let prefix = format!("{root}.");
+        let mut current = oid(root)?;
+        let mut count = 0;
+        while count < 256 && values.len() < 1600 {
+            let reply =
+                tokio::time::timeout(Duration::from_secs(2), session.getbulk(&[&current], 0, 20))
+                    .await;
+            let pdu = match reply {
+                Ok(Ok(pdu)) if pdu.error_status == 0 => pdu,
+                Ok(Err(snmp2::Error::AuthUpdated)) if count == 0 => {
+                    count += 1;
+                    continue;
+                }
+                _ if values.is_empty() => {
+                    return Err("SNMPv3 authentication failed or system MIB did not respond")
+                }
+                _ => break,
+            };
+            let mut next = None;
+            let mut done = false;
+            for (binding, value) in pdu.varbinds {
+                let name = binding.to_string().trim_start_matches('.').to_owned();
+                if !name.starts_with(&prefix)
+                    || matches!(
+                        value,
+                        Value::EndOfMibView | Value::NoSuchObject | Value::NoSuchInstance
+                    )
+                {
+                    done = true;
+                    break;
+                }
+                if let Some(value) = topology_value(value) {
+                    values.insert(name, value);
+                }
+                next = Some(binding.to_owned());
+                count += 1;
+                if count >= 256 || values.len() >= 1600 {
+                    break;
+                }
+            }
+            if done || next.as_ref().is_none_or(|next| next == &current) {
+                break;
+            }
+            current = next.expect("checked presence above");
+        }
+    }
+    if values.is_empty() {
+        Err("SNMPv3 agent returned no readable system data")
+    } else {
+        Ok(values)
+    }
 }
 
 pub async fn probe_snmp(task: &CheckTask) -> ProbeResult {

@@ -42,6 +42,9 @@ pub struct CollectorConfig {
 
     #[arg(long, default_value = "./buffer_queue")]
     pub buffer_dir: PathBuf,
+
+    #[arg(long, env = "ZADDESH_COLLECTOR_NETWORK_DIAGRAM_BETA")]
+    pub network_diagram_beta: bool,
 }
 
 fn positive_size(value: &str) -> Result<usize, String> {
