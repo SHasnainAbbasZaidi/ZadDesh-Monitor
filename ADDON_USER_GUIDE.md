@@ -28,8 +28,10 @@ To receive incident notifications, set `ZADDESH_FEATURES__INCIDENT_WEBHOOK_URL` 
 ## Network Diagram Beta
 
 1. Create or edit an enabled SNMPv3 device check with a stored credential. Use the management IP as both the inventory address and check target. The credential needs read access to system and interface OIDs and LLDP-MIB, or CDP-MIB on supported equipment. Enable LLDP or CDP on the relevant interfaces.
-2. As an Admin, open **Network Diagram**, create a diagram, select one or more seed checks and choose **Run discovery now**. The Discovery panel shows an outcome per seed.
+2. As an Admin, open **Network Diagram**. **Automatic network map** appears after ZadDesh finds a qualifying saved check. The scheduler looks for new checks every 15 seconds and queues rediscovery at five-minute intervals. The Discovery panel shows the outcome per device. You can also create a separate diagram and run discovery from selected checks.
 3. Select a node or link to inspect it. Choose **Unlock layout** to move nodes and **Save layout** to persist the positions. Use **Changes detected** to record approval or dismissal. The diagram displays observations before review. Manually added nodes and links are retained during discovery.
 4. Choose **Publish** to make the diagram available as a read-only widget. A User can open **Overview**, choose **Add diagram widget**, select the published diagram, and set its site or problems-only view, size and labels. Unpublishing removes the graph from that widget.
 
-Inventory health and alert counts update from the core. Link state and utilization update when discovery observes the interfaces. Run discovery again to collect a new sample. Utilization needs two valid counter samples.
+Inventory health and alert counts update from the core. Link state and utilization update when discovery observes the interfaces. Utilization needs two valid counter samples. Renamed nodes and saved layout positions persist through rediscovery. A node may appear without links when its device exposes SNMP but reports no LLDP or CDP neighbors.
+
+For a separate discovery process, run the collector with `--topology-only` and an existing individual collector token. This mode processes topology jobs only. The normal collector can continue handling scheduled checks, metrics and heartbeats.

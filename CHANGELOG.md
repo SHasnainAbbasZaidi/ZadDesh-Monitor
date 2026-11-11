@@ -4,6 +4,7 @@
 
 - Added the opt-in Alerts, Events and Logs workspace with correlated probe incidents, a timeline and webhook delivery.
 - Added the opt-in Network Diagram Beta with Admin-only SNMPv3 seed discovery and published read-only Overview widgets.
+- Network Diagram Beta now builds and refreshes an automatic map from saved SNMPv3 checks and preserves Admin edits.
 - See [the add-on guide](ADDON_USER_GUIDE.md) and [verification report](ADDON_FEATURES_REPORT.md).
 
 ## [0.1.0]

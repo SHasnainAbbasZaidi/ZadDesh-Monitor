@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import re
 from datetime import datetime
@@ -75,22 +76,36 @@ def neighbors(data: dict[str, str]):
     chassis = column(data, LLDP + ".5")
     names = column(data, LLDP + ".9")
     interface_names = column(data, IF + ".2") | column(data, IFX + ".1")
+    addresses: dict[str, list[str]] = {}
+    for suffix in column(data, "1.0.8802.1.1.2.1.4.2.1.3"):
+        indices = suffix.split(".")
+        if len(indices) < 5:
+            continue
+        family, size = indices[3:5]
+        if (family, size) not in {("1", "4"), ("2", "16")} or len(indices[5:]) != int(size):
+            continue
+        try:
+            address = str(ipaddress.ip_address(bytes(map(int, indices[5:]))))
+        except ValueError:
+            continue
+        addresses.setdefault(".".join(indices[:3]), []).append(address)
     lldp_indices = set()
     for suffix, remote_port in column(data, LLDP + ".7").items():
         indices = suffix.split(".")
-        name = names.get(suffix) or chassis.get(suffix)
+        management = addresses.get(suffix, [])
+        name = names.get(suffix) or chassis.get(suffix) or next(iter(management), None)
         if len(indices) == 3 and name and remote_port:
             index = indices[1]
             lldp_indices.add(index)
             local = lldp_ports.get(index) or interface_names.get(index) or index
-            yield "lldp", index, local, name, remote_port
+            yield "lldp", index, local, name, remote_port, management
     cdp_names = column(data, CDP + ".6")
     for suffix, remote_port in column(data, CDP + ".7").items():
         index = suffix.split(".")[0]
         name = cdp_names.get(suffix)
         local = interface_names.get(index) or index
         if index not in lldp_indices and not any(port_key(lldp_ports.get(i, i)) == port_key(local) for i in lldp_indices) and name and remote_port:
-            yield "cdp", index, local, name, remote_port
+            yield "cdp", index, local, name, remote_port, []
 
 
 def link_incident(db: Session, link: TopologyLink, device: Device, now: datetime) -> None:
@@ -191,8 +206,9 @@ def merge_observation(db: Session, diagram_id: int, device: Device, data: dict[s
                 if inventory:
                     link_incident(db, link, inventory, now)
 
-    for method, index, local_port, remote_name, remote_port in neighbors(data):
-        target = node(remote_name, known_names.get(remote_name.casefold()))
+    for method, index, local_port, remote_name, remote_port, management in neighbors(data):
+        identity = next((known_names[address] for address in management if known_names.get(address)), None)
+        target = node(remote_name, identity or known_names.get(remote_name.casefold()))
         if source.id == target.id:
             continue
         key = link_key(source.id, local_port, target.id, remote_port)

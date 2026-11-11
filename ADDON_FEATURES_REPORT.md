@@ -31,12 +31,19 @@ Scanopy is AGPL-3.0. The ZadDesh baseline has no repository license file, so reu
 | Incident mobile | [390 × 844](audit-screenshots/addons/incident-light-mobile.png) | [390 × 844](audit-screenshots/addons/incident-dark-mobile.png) |
 | Network Diagram | [Desktop](audit-screenshots/addons/diagram-light.png) | [Desktop](audit-screenshots/addons/diagram-dark.png) |
 
+## Automatic map follow-up
+
+- Migration `0008_automatic_topology` adds one private, built-in map. The core queues eligible saved SNMPv3 checks without browser activity. It checks for new seeds every 15 seconds and schedules each eligible device for refresh every five minutes. Admin label and layout edits survive rediscovery. Advertised LLDP management addresses can resolve inventory devices whose configured names differ.
+- The live Windows instance migrated successfully and reported ready. Its existing Windows collector continues normal polling. A separate Rust topology worker in Ubuntu under WSL connects to the core through a local loopback bridge. The first automatic run collected **1,065 OIDs** and produced **12 nodes and 20 links** (12 LLDP and eight CDP). The second saved seed returned an authentication or agent-response error.
+- The Windows core suite passed **28 tests** with MongoDB configured. The Linux `addon_lab.py --topology-only` test populated an automatic map with **two nodes and one high-confidence LLDP link** using real Net-SNMP traffic. Its second seed used a deliberately wrong credential and failed as expected.
+- The Windows browser regression passed in **35.3 s** and verified the automatic map and queued seed appeared without clicking discovery. Ubuntu Rust format, Clippy and test checks passed. The first combined lab timed out waiting for the webhook. A fresh combined run received both webhook events, opened the incident in **5.03 s**, and resolved the same alert in **4.92 s**.
+
 ## Known gaps
 
 | Priority | Area | Remaining work |
 | --- | --- | --- |
-| High | Discovery | Beta accepts explicit inventory seeds. Subnet expansion, neighbor recursion and depth limits are unimplemented. The collector queries bridge, VLAN, ARP and routing trees, but the core currently infers links from LLDP/CDP. MAC/ARP inference, trunk and port-channel reconciliation, and unmanaged probes remain open. |
-| High | Link freshness and acceptance | Node health and alert badges update from the core. Link measurements update on demand. Scheduled rediscovery, physical link-down timing, and live verification of all requested SNMPv3 security combinations remain open. |
+| High | Discovery | Automatic discovery uses eligible saved inventory checks within permitted ranges. Subnet expansion, neighbor recursion and depth limits are unimplemented. The collector queries bridge, VLAN, ARP and routing trees, but the core currently infers links from LLDP/CDP. MAC/ARP inference, trunk and port-channel reconciliation, and unmanaged probes remain open. |
+| High | Link freshness and acceptance | Node health and alert badges update from the core. The automatic map refreshes links through scheduled discovery. Physical link-down timing, native Windows discovery, and live verification of all requested SNMPv3 security combinations remain open. |
 | Medium | Diagram controls | Minimap, VLAN grouping and filtering, group collapse, and dedicated widget kiosk verification remain open. New discovered peers appear as part of link observations. Review tracks links and their missing/status observations. A separate new/missing-device lifecycle is absent. A deleted discovered item can reappear when observed again. SVG uses stored positions or the static layout calculation. PNG captures the rendered canvas. |
 | Medium | Incident context | Links from raw SNMP traps to incidents and explicit per-interface metric series and neighbor context remain open. Related MongoDB logs use time and source matching. The new timeline tracks actions from the workspace. Legacy alert actions do not add those entries. Named credential fields and common credential formats are masked, with unlabeled secret detection still open. |
 | Medium | Performance and regression scope | A measured 500-node FPS result, Linux browser regression, and PostgreSQL migration verification are outstanding. |

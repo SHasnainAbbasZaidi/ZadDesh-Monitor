@@ -8,6 +8,7 @@ import { useTheme } from '../../context/ThemeContext';
 use([GraphChart, TooltipComponent, CanvasRenderer]);
 
 export type Diagram = {
+  automatic?: boolean;
   id: number; name: string; published: boolean;
   layout: { mode?: string; positions?: Record<string, [number, number]> };
   nodes: { id: number; label: string; status: string; kind: string; alerts: number; site_id?: number; ip?: string; device_id?: number; manual?: boolean; interfaces?: object }[];

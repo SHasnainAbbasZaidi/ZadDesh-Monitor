@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from zaddesh_core.config import settings
 import zaddesh_core.models  # noqa: F401
 from zaddesh_core.api.v1 import api_v1_router
+from zaddesh_core.api.v1.network_diagram import topology_loop
 from zaddesh_core.api.v1.system import router as system_root_router
 from zaddesh_core.incident_delivery import delivery_loop
 
@@ -24,12 +25,13 @@ async def lifespan(_app: FastAPI):
     stop = asyncio.Event()
     worker = (asyncio.create_task(delivery_loop(stop)) if settings.features.incident_workspace
               and settings.features.incident_webhook_url and not settings.demo_mode else None)
+    topology = (asyncio.create_task(topology_loop(stop)) if settings.features.network_diagram_beta
+                and not settings.demo_mode else None)
     try:
         yield
     finally:
-        if worker:
-            stop.set()
-            await worker
+        stop.set()
+        await asyncio.gather(*(task for task in (worker, topology) if task is not None))
 
 
 app = FastAPI(

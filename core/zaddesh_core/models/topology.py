@@ -14,6 +14,7 @@ class TopologyDiagram(Base):
     name: Mapped[str] = mapped_column(String(100))
     layout: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     published: Mapped[bool] = mapped_column(default=False)
+    automatic_key: Mapped[str | None] = mapped_column(String(32), index=True, unique=True)
 
 
 class TopologyNode(Base):

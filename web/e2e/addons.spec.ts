@@ -93,6 +93,20 @@ test('add-on workspace and published diagram access', async ({ page, request }) 
   expect(viewerResponse.status()).toBe(201);
   await page.getByRole('button', { name: 'Publish', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Unpublish', exact: true })).toBeVisible();
+  if (process.env.ZADDESH_E2E_AUTO_TOPOLOGY) {
+    const saved = await request.post('/api/v1/devices', { headers: admin, data: {
+      name: 'Automatic topology seed', ip: '192.0.2.23', initial_check_types: [],
+      initial_snmp: { params: { version: '3', security_level: 'authNoPriv' },
+        credentials: { username: 'topology-fixture', auth_password: randomBytes(16).toString('hex') } },
+    } });
+    expect(saved.status()).toBe(201);
+    await expect(page.getByRole('combobox', { name: 'Diagram', exact: true }).locator('option')
+      .filter({ hasText: 'Automatic network map' })).toHaveCount(1, { timeout: 35_000 });
+    await expect(page.getByRole('heading', { name: 'Published lab diagram' })).toBeVisible();
+    await page.getByRole('combobox', { name: 'Diagram', exact: true }).selectOption({ label: 'Automatic network map' });
+    await expect(page.getByRole('heading', { name: 'Automatic network map' })).toBeVisible();
+    await expect(page.getByText(/queued Automatic topology seed/i)).toBeVisible();
+  }
   await page.getByRole('button', { name: 'Sign out' }).click();
   await signIn('addon-viewer');
   await expect(page.getByRole('navigation').getByRole('button', { name: /Network Diagram/ })).toHaveCount(0);

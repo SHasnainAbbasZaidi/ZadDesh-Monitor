@@ -41,6 +41,7 @@ def wait_for(predicate, limit=30):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--collector", type=Path, required=True)
+    parser.add_argument("--topology-only", action="store_true", help="Skip the HTTP and webhook acceptance checks")
     args = parser.parse_args()
     binary = args.collector.resolve(strict=True)
     http_status = 200
@@ -124,39 +125,44 @@ pass .1.0.8802.1.1.2 {fixture}
                     def get(route):
                         return client.get("/api/v1/" + route).raise_for_status().json()
 
-                    target = post("devices", {"name": "HTTP fixture", "ip": "127.0.0.1", "initial_check_types": []})
-                    check = post("checks", {"device_id": target["id"], "name": "Fixture HTTP", "check_type": "http",
-                                            "target": f"http://127.0.0.1:{server.server_port}", "interval_seconds": 5,
-                                            "timeout_seconds": 2, "retries": 0})
-                    diagram = post("network-diagram", {"name": "SNMPv3 lab"})["id"]
-                    seeds = []
+                    if not args.topology_only:
+                        target = post("devices", {"name": "HTTP fixture", "ip": "127.0.0.1", "initial_check_types": []})
+                        check = post("checks", {"device_id": target["id"], "name": "Fixture HTTP", "check_type": "http",
+                                                "target": f"http://127.0.0.1:{server.server_port}", "interval_seconds": 5,
+                                                "timeout_seconds": 2, "retries": 0})
                     for label, secret in (("fixture-seed", auth), ("wrong-credential", secrets.token_hex(24))):
-                        device = post("devices", {"name": label, "ip": "127.0.0.1", "initial_check_types": [],
+                        post("devices", {"name": label, "ip": "127.0.0.1", "initial_check_types": [],
                             "initial_snmp": {"params": {"version": "3", "port": snmp_port, "security_level": "authPriv",
                                                         "auth_protocol": "sha1", "privacy_protocol": "aes128"},
                                              "credentials": {"username": "addonLab", "auth_password": secret,
                                                              "priv_password": privacy}}})
-                        seeds.append(get(f"checks?device_id={device['id']}")[0]["id"])
-                    post(f"network-diagram/{diagram}/discovery", {"checks": seeds})
                     processes.append(subprocess.Popen([str(binary), "--server-url", base, "--buffer-dir", str(work / "spool"),
                                                        "--poll-tasks-interval-secs", "2", "--flush-interval-secs", "1"],
                                                       env=env, stdout=collector_log, stderr=collector_log))
-                    wait_for(lambda: get(f"checks/{check['id']}")["state"]["current_status"] == "ok")
-                    started = time.monotonic()
-                    http_status = 503
-                    incident_route = f"incidents/alerts?device_id={target['id']}"
-                    opened = wait_for(lambda: get(incident_route)["alerts"])
-                    assert len(opened) == 1 and opened[0]["status"] == "active"
-                    down_seconds = time.monotonic() - started
-                    started = time.monotonic()
-                    http_status = 200
-                    wait_for(lambda: get(incident_route)["alerts"][0]["status"] == "resolved")
-                    up_seconds = time.monotonic() - started
-                    closed = get(incident_route)["alerts"]
-                    assert len(closed) == 1 and closed[0]["id"] == opened[0]["id"]
-                    wait_for(lambda: {"opened", "resolved"} <= set(deliveries))
-                    print(json.dumps({"http_open_seconds": round(down_seconds, 2), "http_resolve_seconds": round(up_seconds, 2),
-                                      "same_alert": True, "deliveries": deliveries}), flush=True)
+                    if not args.topology_only:
+                        wait_for(lambda: get(f"checks/{check['id']}")["state"]["current_status"] == "ok")
+                        started = time.monotonic()
+                        http_status = 503
+                        incident_route = f"incidents/alerts?device_id={target['id']}"
+                        opened = wait_for(lambda: get(incident_route)["alerts"])
+                        assert len(opened) == 1 and opened[0]["status"] == "active"
+                        down_seconds = time.monotonic() - started
+                        started = time.monotonic()
+                        http_status = 200
+                        wait_for(lambda: get(incident_route)["alerts"][0]["status"] == "resolved")
+                        up_seconds = time.monotonic() - started
+                        closed = get(incident_route)["alerts"]
+                        assert len(closed) == 1 and closed[0]["id"] == opened[0]["id"]
+                        try:
+                            wait_for(lambda: {"opened", "resolved"} <= set(deliveries))
+                        except TimeoutError:
+                            attempts = get(f"incidents/alerts/{opened[0]['id']}")["notifications"]
+                            print(json.dumps({"received": deliveries, "attempts": attempts}), flush=True)
+                            raise
+                        print(json.dumps({"http_open_seconds": round(down_seconds, 2), "http_resolve_seconds": round(up_seconds, 2),
+                                          "same_alert": True, "deliveries": deliveries}), flush=True)
+
+                    diagram = wait_for(lambda: next((item["id"] for item in get("network-diagram") if item["automatic"]), None))
 
                     def finished():
                         runs = get(f"network-diagram/{diagram}/discovery")
@@ -164,7 +170,8 @@ pass .1.0.8802.1.1.2 {fixture}
 
                     runs = wait_for(finished, limit=65)
                     graph = get(f"network-diagram/{diagram}")
-                    print(json.dumps({"snmp_runs": runs, "nodes": len(graph["nodes"]), "links": len(graph["links"])}), flush=True)
+                    print(json.dumps({"automatic": graph["automatic"], "snmp_runs": runs,
+                                      "nodes": len(graph["nodes"]), "links": len(graph["links"])}), flush=True)
                     assert {item["status"] for item in runs} == {"complete", "failed"}
                     assert len(graph["nodes"]) == 2 and len(graph["links"]) == 1
                     assert graph["links"][0]["confidence"] == "high" and graph["links"][0]["method"] == "lldp"

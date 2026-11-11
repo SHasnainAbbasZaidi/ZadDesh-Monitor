@@ -1,7 +1,11 @@
+from datetime import timedelta
 from secrets import token_hex
 
+from zaddesh_core.api.v1.network_diagram import schedule_inventory
 from zaddesh_core.config import settings
+from zaddesh_core.incidents import utc_now
 from zaddesh_core.models.infrastructure import Collector
+from zaddesh_core.models.topology import TopologyRun
 from zaddesh_core.security import hash_token
 
 
@@ -48,22 +52,32 @@ def test_discovery_rbac_merge_publication_and_link_recovery(client, db_session, 
             values.update({"1.0.8802.1.1.2.1.3.7.1.3.1": local,
                            "1.0.8802.1.1.2.1.4.1.1.7.0.1.1": remote,
                            "1.0.8802.1.1.2.1.4.1.1.9.0.1.1": neighbor})
+            if check_id == first:
+                values["1.0.8802.1.1.2.1.4.2.1.3.0.1.1.1.4.192.0.2.5"] = "2"
         result = client.post(f"http://127.0.0.1/api/v1/collectors/topology-result/{task['run_id']}",
                              headers=collector, json={"lease": task["lease"], "values": values})
         assert result.status_code == 200 and result.json()["status"] == "complete"
 
-    discover(first, "Gi0/1", "lab-router", "Gi0/2", "1")
+    discover(first, "Gi0/1", "different-advertised-name", "Gi0/2", "1")
     discover(second, "GigabitEthernet0/2", "lab-switch", "GigabitEthernet0/1", "1")
     graph = client.get(route, headers=admin_headers)
     assert credentials["auth_password"] not in graph.text
     assert len(graph.json()["nodes"]) == 2 and len(graph.json()["links"]) == 1
     assert graph.json()["links"][0]["confidence"] == "high"
+    node_id = next(node["id"] for node in graph.json()["nodes"] if node["device_id"] == first_device)
+    assert client.put(f"{route}/nodes/{node_id}", headers=admin_headers, json={
+        "label": "Edited switch", "kind": "switch",
+    }).status_code == 204
+    assert client.patch(route, headers=admin_headers, json={"positions": {str(node_id): [12, 34]}}).status_code == 200
     discover(first, "Gi0/1", "lab-router", "Gi0/2", "2", include_neighbor=False)
     assert client.get(route, headers=admin_headers).json()["links"][0]["status"] == "down"
     alerts = f"/api/v1/incidents/alerts?device_id={first_device}&type=link"
     alert = client.get(alerts, headers=viewer_headers).json()["alerts"][0]
     assert alert["status"] == "active"
-    discover(first, "Gi0/1", "lab-router", "Gi0/2", "1")
+    discover(first, "Gi0/1", "different-advertised-name", "Gi0/2", "1")
+    updated_graph = client.get(route, headers=admin_headers).json()
+    assert next(node for node in updated_graph["nodes"] if node["id"] == node_id)["label"] == "Edited switch"
+    assert updated_graph["layout"]["positions"][str(node_id)] == [12, 34]
     assert client.get(alerts, headers=viewer_headers).json()["alerts"][0]["id"] == alert["id"]
     assert client.get(alerts, headers=viewer_headers).json()["alerts"][0]["status"] == "resolved"
     widget = "/api/v1/network-widgets/mine"
@@ -73,3 +87,37 @@ def test_discovery_rbac_merge_publication_and_link_recovery(client, db_session, 
     assert len(client.get(widget, headers=viewer_headers).json()["diagram"]["links"]) == 1
     assert client.patch(route, headers=admin_headers, json={"published": False}).status_code == 200
     assert client.get(widget, headers=viewer_headers).json()["diagram"] is None
+
+
+def test_saved_snmp_automatically_queues_one_map(client, db_session, admin_headers, monkeypatch):
+    monkeypatch.setattr(settings.features, "network_diagram_beta", True)
+    monkeypatch.setattr(settings.features, "topology_allowed_ranges", ["192.0.2.0/24"])
+    monkeypatch.setattr(settings.security, "encryption_key", token_hex(32))
+
+    def add(ip):
+        response = client.post("http://127.0.0.1/api/v1/devices", headers=admin_headers, json={
+            "name": f"Switch {ip}", "ip": ip, "initial_check_types": [],
+            "initial_snmp": {"params": {"version": "3", "security_level": "authNoPriv"},
+                             "credentials": {"username": "diagram-lab", "auth_password": token_hex(16)}},
+        })
+        assert response.status_code == 201
+        return client.get(f"/api/v1/checks?device_id={response.json()['id']}", headers=admin_headers).json()[0]["id"]
+
+    now = utc_now()
+    assert schedule_inventory(db_session, now) == 0
+    denied = add("198.51.100.5")
+    first = add("192.0.2.5")
+    assert schedule_inventory(db_session, now) == 1
+    assert schedule_inventory(db_session, now) == 0
+    root = "/api/v1/network-diagram"
+    [item] = client.get(root, headers=admin_headers).json()
+    assert item["automatic"] and not item["published"]
+    second = add("192.0.2.6")
+    assert schedule_inventory(db_session, now) == 1
+    runs = db_session.query(TopologyRun).filter_by(diagram_id=item["id"]).order_by(TopologyRun.id).all()
+    assert [run.check_id for run in runs] == [first, second] and denied not in (first, second)
+    runs[0].status = "complete"
+    db_session.commit()
+    assert schedule_inventory(db_session, now + timedelta(minutes=4)) == 0
+    assert schedule_inventory(db_session, now + timedelta(minutes=5)) == 1
+    assert len(client.get(root, headers=admin_headers).json()) == 1

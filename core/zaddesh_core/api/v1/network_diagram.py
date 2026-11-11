@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
-from datetime import timedelta
+import logging
+from datetime import datetime, timedelta
 from secrets import compare_digest, token_hex
 from typing import Annotated, Literal, cast
 
@@ -11,13 +13,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import func, or_, update
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from zaddesh_core.api.deps import get_current_user, require_role, verify_collector_token
 from zaddesh_core.api.v1.incidents import iso
 from zaddesh_core.api.v1.stream import notify_change
 from zaddesh_core.config import settings
-from zaddesh_core.database import get_db
+from zaddesh_core.database import SessionLocal, get_db
 from zaddesh_core.incidents import redact, utc_now
 from zaddesh_core.models.alerts import Alert
 from zaddesh_core.models.auth import AuditLog, User
@@ -27,6 +30,11 @@ from zaddesh_core.models.system import Dashboard, Widget
 from zaddesh_core.models.topology import TopologyChange, TopologyDiagram, TopologyLink, TopologyNode, TopologyRun
 from zaddesh_core.security import allows_secret_transport, decrypt_secret
 from zaddesh_core.topology import link_key, merge_observation
+
+logger = logging.getLogger(__name__)
+AUTOMATIC_DIAGRAM = "inventory"
+DISCOVERY_QUEUE_LIMIT = 64
+DISCOVERY_REFRESH = timedelta(minutes=5)
 
 
 def enabled() -> None:
@@ -64,8 +72,9 @@ def diagram(db, identifier, published=False):
 
 @router.get("")
 def diagrams(db: Session = Depends(get_db)):
-    return [{"id": item.id, "name": item.name, "published": item.published}
-            for item in db.query(TopologyDiagram).order_by(TopologyDiagram.name).limit(200)]
+    return [{"id": item.id, "name": item.name, "published": item.published, "automatic": item.automatic_key is not None}
+            for item in db.query(TopologyDiagram).order_by(TopologyDiagram.automatic_key.is_(None),
+                                                           TopologyDiagram.name).limit(200)]
 
 
 @router.post("", status_code=201)
@@ -89,6 +98,7 @@ def graph(db: Session, item: TopologyDiagram):
     ).order_by(TopologyNode.id).all()
     links = db.query(TopologyLink).filter_by(diagram_id=item.id).order_by(TopologyLink.id)
     return {"id": item.id, "name": item.name, "published": item.published, "layout": item.layout,
+            "automatic": item.automatic_key is not None,
             "nodes": [{"id": node.id, "label": node.label, "device_id": device.id if device else None,
                        "site_id": device.site_id if device else None, "ip": device.ip if device else None,
                        "status": device.status if device else "unmanaged", "alerts": alerts.get(device.id, 0) if device else 0,
@@ -145,20 +155,89 @@ def discoverable(check: Check, device: Device) -> bool:
             and isinstance(params.get("stored_credential_id"), int))
 
 
+def lock_automatic_diagram(db: Session, item: TopologyDiagram) -> None:
+    # A write lock serializes queue capacity and deduplication on SQLite and PostgreSQL.
+    db.execute(update(TopologyDiagram).where(TopologyDiagram.id == item.id).values(
+        automatic_key=TopologyDiagram.automatic_key,
+    ))
+
+
+def schedule_inventory(db: Session, now: datetime) -> int:
+    checks_by_device: dict[int, int] = {}
+    for check, device in db.query(Check, Device).join(Device, Check.device_id == Device.id).filter(
+        Check.check_type == "snmp", Check.is_enabled.is_(True), Device.is_monitored.is_(True),
+    ).order_by(Check.id.desc()):
+        if device.id not in checks_by_device and discoverable(check, device):
+            checks_by_device[device.id] = check.id
+    if not checks_by_device:
+        return 0
+
+    item = db.query(TopologyDiagram).filter_by(automatic_key=AUTOMATIC_DIAGRAM).first()
+    if item is None:
+        item = TopologyDiagram(name="Automatic network map", automatic_key=AUTOMATIC_DIAGRAM,
+                               layout={"mode": "hierarchical"})
+        db.add(item)
+        db.flush()
+        audit(db, None, "topology.created", item.id, {"automatic": True})
+    else:
+        lock_automatic_diagram(db, item)
+
+    runs = db.query(TopologyRun).filter_by(diagram_id=item.id)
+    pending = [identifier for identifier, in runs.with_entities(TopologyRun.check_id).filter(
+        TopologyRun.status.in_(("queued", "running", "processing")),
+    )]
+    latest = dict(runs.with_entities(TopologyRun.check_id, func.max(TopologyRun.created_at))
+                  .group_by(TopologyRun.check_id).all())
+    pending_checks = set(pending)
+    cutoff = now - DISCOVERY_REFRESH
+    due = [identifier for identifier in checks_by_device.values()
+           if identifier not in pending_checks and (identifier not in latest or latest[identifier] <= cutoff)]
+    due.sort(key=lambda identifier: (identifier in latest, latest.get(identifier, now), identifier))
+    due = due[:max(0, DISCOVERY_QUEUE_LIMIT - len(pending))]
+    if due:
+        runs.filter(TopologyRun.status.in_(("complete", "failed")),
+                    TopologyRun.created_at < now - timedelta(days=1)).delete(synchronize_session=False)
+    db.add_all(TopologyRun(diagram_id=item.id, check_id=identifier, status="queued", created_at=now) for identifier in due)
+    db.commit()
+    return len(due)
+
+
+def schedule_inventory_once() -> None:
+    with SessionLocal() as db:
+        if schedule_inventory(db, utc_now()):
+            notify_change()
+
+
+async def topology_loop(stop: asyncio.Event) -> None:
+    while not stop.is_set():
+        try:
+            await asyncio.to_thread(schedule_inventory_once)
+        except (SQLAlchemyError, HTTPException) as error:
+            logger.warning("Automatic topology scheduling will retry (%s)", type(error).__name__)
+        try:
+            await asyncio.wait_for(stop.wait(), 15)
+        except asyncio.TimeoutError:
+            pass
+
+
 class Discovery(BaseModel):
     checks: list[int] = Field(min_length=1, max_length=64)
 
 
 @router.post("/{diagram_id}/discovery", status_code=202)
 def queue_discovery(diagram_id: int, payload: Discovery, user: User = Depends(admin), db: Session = Depends(get_db)):
-    diagram(db, diagram_id)
+    item = diagram(db, diagram_id)
     identifiers = set(payload.checks)
     rows = db.query(Check, Device).join(Device, Check.device_id == Device.id).filter(Check.id.in_(identifiers)).all()
     if len(rows) != len(identifiers) or any(not discoverable(check, device) for check, device in rows):
         raise HTTPException(422, "Each seed must use an enabled stored SNMPv3 credential and a permitted device IP")
-    if db.query(TopologyRun).filter(
-        TopologyRun.diagram_id == diagram_id, TopologyRun.status.in_(("queued", "running")),
-    ).count() + len(identifiers) > 64:
+    if item.automatic_key:
+        lock_automatic_diagram(db, item)
+    pending = [identifier for identifier, in db.query(TopologyRun.check_id).filter(
+        TopologyRun.diagram_id == diagram_id, TopologyRun.status.in_(("queued", "running", "processing")),
+    )]
+    identifiers.difference_update(pending)
+    if len(pending) + len(identifiers) > DISCOVERY_QUEUE_LIMIT:
         raise HTTPException(409, "This diagram already has too many queued or running seeds")
     runs = [TopologyRun(diagram_id=diagram_id, check_id=identifier, status="queued", created_at=utc_now()) for identifier in identifiers]
     db.add_all(runs)

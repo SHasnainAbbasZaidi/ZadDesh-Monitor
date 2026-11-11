@@ -9,7 +9,7 @@ import type { Check, Site } from '../types';
 const Graph = lazy(() => import('../components/ui/NetworkGraph'));
 const layouts = [['hierarchical', 'Hierarchical'], ['force', 'Force-directed'], ['site', 'By site'], ['subnet', 'By subnet']];
 const kinds = ['router', 'switch', 'firewall', 'ap', 'server', 'ups', 'printer', 'unmanaged', 'internet'];
-type DiagramItem = Pick<Diagram, 'id' | 'name' | 'published'>;
+type DiagramItem = Pick<Diagram, 'id' | 'name' | 'published' | 'automatic'>;
 type Run = { id: number; status: string; device: string; message?: string };
 type Change = { id: number; description: string; decision: string };
 
@@ -39,6 +39,7 @@ export default function NetworkDiagram() {
   const [locked, setLocked] = useState(true);
   const [positions, setPositions] = useState<Record<string, [number, number]>>({});
   const [fit, setFit] = useState(0);
+  const choseDiagram = useRef(false);
   const png = useRef<() => string>();
   const endpoint = `/network-diagram/${id}`;
   const selectedNode = graph?.nodes.find(node => selection?.kind === 'node' && node.id === selection.id);
@@ -46,12 +47,17 @@ export default function NetworkDiagram() {
   useAddonUpdates(() => setRefresh(value => value + 1));
 
   useEffect(() => {
-    void Promise.all([request<DiagramItem[]>('/network-diagram'), api.getChecks({ check_type: 'snmp', is_enabled: true })])
+    const controller = new AbortController();
+    void Promise.all([request<DiagramItem[]>('/network-diagram', { signal: controller.signal }),
+      api.getChecks({ check_type: 'snmp', is_enabled: true })])
       .then(([items, candidates]) => {
-        setDiagrams(items); setId(items[0]?.id);
+        if (controller.signal.aborted) return;
+        setDiagrams(items);
+        setId(current => choseDiagram.current ? current : items[0]?.id);
         setChecks(candidates.filter(check => check.params.version === '3' && !check.params.credential));
-      }).catch(failure => setError(failure.message));
-  }, []);
+      }).catch(failure => { if (!controller.signal.aborted) setError(failure.message); });
+    return () => controller.abort();
+  }, [refresh]);
 
   useEffect(() => {
     if (!id) return;
@@ -79,15 +85,18 @@ export default function NetworkDiagram() {
 
   return <section className="space-y-4">
     <h1 className="ops-heading">Network Diagram <Badge status="info">Beta</Badge></h1>
+    <p className="ops-muted text-sm">The automatic map uses saved SNMPv3 checks on permitted devices and refreshes in the background.</p>
     {error && <p className="ops-notice" role="alert">{error}</p>}
     <Card><div className="flex flex-wrap items-end gap-3">
       <label className="text-sm">Diagram<select className="dash-select block" value={id ?? ''} onChange={event => {
+        choseDiagram.current = true;
         setId(Number(event.target.value)); setPositions({}); setSelection(undefined); setSearch('');
       }}><option value="" disabled>Choose a diagram</option>{diagrams.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <form className="flex items-end gap-2" onSubmit={async event => {
         event.preventDefault();
         try {
           const item = await request<DiagramItem>('/network-diagram', { method: 'POST', body: JSON.stringify({ name }) });
+          choseDiagram.current = true;
           setDiagrams(previous => [...previous, item]); setId(item.id); setName(''); setPositions({}); setSelection(undefined);
         } catch (failure) { setError((failure as Error).message); }
       }}>
@@ -95,7 +104,11 @@ export default function NetworkDiagram() {
         <button className="ops-button" type="submit">Create diagram</button>
       </form>
     </div></Card>
+    {!diagrams.some(item => item.automatic) && <p className="ops-muted text-sm">
+      An automatic map appears after ZadDesh finds an enabled device check with a stored SNMPv3 credential and a permitted IP.
+    </p>}
     {id && <Card title="Discovery">
+      {activeGraph?.automatic && <p className="mb-3 text-sm ops-muted">Saved SNMPv3 checks are queued automatically. Links appear when devices report LLDP or CDP neighbors.</p>}
       <div className="flex flex-wrap items-end gap-3">
         <label className="text-sm">SNMPv3 seed checks<select className="dash-select block" multiple size={Math.min(5, Math.max(2, checks.length))}
           value={seeds.map(String)} onChange={event => setSeeds(Array.from(event.target.selectedOptions, option => Number(option.value)))}>
@@ -127,7 +140,9 @@ export default function NetworkDiagram() {
         <Graph key={`${id}:${fit}`} diagram={activeGraph} draggable={!locked} onSelect={(kind, item) => setSelection({ kind, id: item })}
           onMove={!locked ? (node, point) => setPositions(previous => ({ ...previous, [node]: point })) : undefined}
           exportGraph={exporter => { png.current = exporter; }} />
-      </Suspense> : <p className="ops-empty">Run discovery or add a node to populate this diagram.</p>}
+      </Suspense> : <p className="ops-empty">{activeGraph.automatic
+        ? 'Waiting for successful SNMPv3 discovery results.'
+        : 'Run discovery or add a node to populate this diagram.'}</p>}
       <label className="text-sm">Find a node<input className="dash-select ml-2" value={search} onChange={event => setSearch(event.target.value)} /></label>
       <div className="mt-2 flex max-h-28 flex-wrap gap-2 overflow-auto">
         {visible?.map(node => <button className="ops-button" key={node.id} onClick={() => setSelection({ kind: 'node', id: node.id })}>{node.label}</button>)}
