@@ -6,6 +6,7 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      '/api/v1/addon-updates': { target: 'http://localhost:8000', ws: true },
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,

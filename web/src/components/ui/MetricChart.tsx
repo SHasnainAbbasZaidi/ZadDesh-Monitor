@@ -9,6 +9,7 @@ export interface MetricChartProps {
   color?: string;
   height?: number;
   intervalSeconds?: number;
+  annotations?: { timestamp: string; label: string }[];
 }
 
 export type MetricPoint = { timestamp: string; value: number | null };

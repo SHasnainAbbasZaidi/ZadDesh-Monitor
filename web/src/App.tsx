@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { lazy, Suspense, useState, useEffect } from 'react';
 import { useAuth } from './context/AuthContext';
 import { AppLayout } from './components/layout/AppLayout';
 import { Login } from './pages/Login';
@@ -8,7 +8,11 @@ import { Checks } from './pages/Checks';
 import { Alerts } from './pages/Alerts';
 import { Settings } from './pages/Settings';
 import { Logs } from './pages/Logs';
-import { api } from './services/api';
+import { api, request } from './services/api';
+import { IncidentWorkspace } from './pages/IncidentWorkspace';
+
+const NetworkDiagram = lazy(() => import('./pages/NetworkDiagram'));
+const NetworkDiagramWidget = lazy(() => import('./pages/NetworkDiagram').then(module => ({ default: module.NetworkDiagramWidget })));
 
 export const AppContent: React.FC = () => {
   const { user, isLoading, isSetupRequired } = useAuth();
@@ -16,6 +20,7 @@ export const AppContent: React.FC = () => {
   const [activeAlertsCount, setActiveAlertsCount] = useState(0);
   const [demoMode, setDemoMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [features, setFeatures] = useState({ incident_workspace: false, network_diagram_beta: false });
 
   // Fetch active alerts count periodically for the sidebar badge
   useEffect(() => {
@@ -27,6 +32,7 @@ export const AppContent: React.FC = () => {
     };
     fetchBadge();
     api.getSystemInfo().then(info => setDemoMode(info.environment === "demo")).catch(() => {});
+    request<typeof features>('/features').then(setFeatures).catch(() => {});
     const interval = setInterval(fetchBadge, 15000);
     return () => clearInterval(interval);
   }, [user]);
@@ -58,6 +64,7 @@ export const AppContent: React.FC = () => {
         setSearchQuery('');
       }}
       activeAlertsCount={activeAlertsCount}
+      networkDiagram={features.network_diagram_beta}
       onSearchChange={admin ? (query) => {
         setSearchQuery(query);
         if (query && currentTab !== 'devices') {
@@ -72,9 +79,11 @@ export const AppContent: React.FC = () => {
           onNavigateToAlerts={() => setCurrentTab('alerts')}
         />
       )}
+      {tab === 'overview' && features.network_diagram_beta && <Suspense><NetworkDiagramWidget /></Suspense>}
+      {tab === 'network-diagram' && admin && features.network_diagram_beta && <Suspense><NetworkDiagram /></Suspense>}
       {tab === 'devices' && <Devices searchQuery={searchQuery} />}
       {tab === 'checks' && <Checks />}
-      {tab === 'alerts' && <Alerts />}
+      {tab === 'alerts' && (features.incident_workspace ? <IncidentWorkspace /> : <Alerts />)}
       {tab === 'logs' && <Logs />}
       {tab === 'settings' && <Settings />}
     </AppLayout>

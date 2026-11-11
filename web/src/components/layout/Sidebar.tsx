@@ -5,6 +5,7 @@ import {
   Activity,
   AlertTriangle,
   ScrollText,
+  Network,
   Settings as SettingsIcon,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
@@ -13,12 +14,14 @@ interface SidebarProps {
   currentTab: string;
   onSelectTab: (tab: string) => void;
   activeAlertsCount: number;
+  networkDiagram?: boolean;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   currentTab,
   onSelectTab,
   activeAlertsCount,
+  networkDiagram,
 }) => {
   const { user } = useAuth();
   const navItems = [
@@ -34,6 +37,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       badgeColor: 'bg-rose-700 text-white',
     },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
+    ...(networkDiagram && user?.role === 'admin' ? [{ id: 'network-diagram', label: 'Network Diagram', icon: Network }] : []),
   ].filter(item => user?.role === 'admin' || ['overview', 'logs', 'alerts'].includes(item.id));
 
   return (
@@ -77,6 +81,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="flex items-center gap-1.5 md:gap-3">
                 <Icon className="w-4 h-4" />
                 <span className="text-xs md:text-sm">{item.label}</span>
+                {item.id === 'network-diagram' && <span className="text-[10px] ops-muted">Beta</span>}
               </div>
               {item.badge && (
                 <span

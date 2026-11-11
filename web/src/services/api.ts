@@ -11,7 +11,7 @@ export interface InfrastructureLog {
   message: string;
 }
 
-async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+export async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem('zaddesh_token');
   const headers: HeadersInit = {
     'Content-Type': 'application/json',

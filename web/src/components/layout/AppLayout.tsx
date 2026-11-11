@@ -6,6 +6,7 @@ interface AppLayoutProps {
   currentTab: string;
   onSelectTab: (tab: string) => void;
   activeAlertsCount: number;
+  networkDiagram?: boolean;
   onSearchChange?: (term: string) => void;
   children: React.ReactNode;
 }
@@ -14,6 +15,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   currentTab,
   onSelectTab,
   activeAlertsCount,
+  networkDiagram,
   onSearchChange,
   children,
 }) => {
@@ -23,6 +25,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
         currentTab={currentTab}
         onSelectTab={onSelectTab}
         activeAlertsCount={activeAlertsCount}
+        networkDiagram={networkDiagram}
       />
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <Header onSearchChange={onSearchChange} />
