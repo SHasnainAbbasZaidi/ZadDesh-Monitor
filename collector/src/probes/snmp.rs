@@ -251,6 +251,7 @@ const TOPOLOGY_ROOTS: &[&str] = &[
     "1.0.8802.1.1.2.1.4.1.1.5",     // LLDP remote chassis ID
     "1.0.8802.1.1.2.1.4.1.1.7",     // LLDP remote port ID
     "1.0.8802.1.1.2.1.4.1.1.9",     // LLDP remote system name
+    "1.0.8802.1.1.2.1.4.2.1.3",     // LLDP remote management address index
     "1.3.6.1.4.1.9.9.23.1.2.1.1.6", // CDP remote device
     "1.3.6.1.4.1.9.9.23.1.2.1.1.7", // CDP remote port
     "1.3.6.1.2.1.17.4.3",           // bridge forwarding database

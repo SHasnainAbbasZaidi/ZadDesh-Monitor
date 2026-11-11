@@ -45,6 +45,10 @@ pub struct CollectorConfig {
 
     #[arg(long, env = "ZADDESH_COLLECTOR_NETWORK_DIAGRAM_BETA")]
     pub network_diagram_beta: bool,
+
+    /// Process topology jobs using an existing collector registration.
+    #[arg(long, conflicts_with = "enrollment_token")]
+    pub topology_only: bool,
 }
 
 fn positive_size(value: &str) -> Result<usize, String> {

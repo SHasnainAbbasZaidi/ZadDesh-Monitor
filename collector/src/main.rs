@@ -25,6 +25,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut config = CollectorConfig::parse();
 
+    if config.topology_only {
+        info!("Starting ZadDesh topology worker for {}", config.server_url);
+        tokio::select! {
+            _ = topology::run(config) => {}
+            result = shutdown_signal() => result?,
+        }
+        return Ok(());
+    }
+
     info!("=====================================================");
     info!("Starting ZadDesh Collector Engine v0.1.0 (Rust tokio)");
     info!("Target Core Server: {}", config.server_url);
