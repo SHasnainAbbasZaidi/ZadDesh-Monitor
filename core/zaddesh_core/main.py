@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from collections import OrderedDict
 from threading import Lock
@@ -14,6 +16,20 @@ from zaddesh_core.config import settings
 import zaddesh_core.models  # noqa: F401
 from zaddesh_core.api.v1 import api_v1_router
 from zaddesh_core.api.v1.system import router as system_root_router
+from zaddesh_core.incident_delivery import delivery_loop
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    stop = asyncio.Event()
+    worker = (asyncio.create_task(delivery_loop(stop)) if settings.features.incident_workspace
+              and settings.features.incident_webhook_url and not settings.demo_mode else None)
+    try:
+        yield
+    finally:
+        if worker:
+            stop.set()
+            await worker
 
 
 app = FastAPI(
@@ -23,6 +39,7 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
+    lifespan=lifespan,
 )
 
 @app.exception_handler(RequestValidationError)

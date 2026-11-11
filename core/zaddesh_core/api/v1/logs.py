@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
+import re
 from secrets import compare_digest
 from typing import Any, Literal
 from uuid import UUID, uuid4
@@ -17,6 +18,8 @@ from zaddesh_core.api.deps import get_current_user, security_bearer
 from zaddesh_core.config import settings
 from zaddesh_core.models.auth import User
 from zaddesh_core.security import allows_secret_transport
+from zaddesh_core.incidents import redact
+from zaddesh_core.api.v1.stream import notify_change
 
 router = APIRouter(prefix="/logs", tags=["Infrastructure Logs"])
 Severity = Literal["emergency", "alert", "critical", "error", "warning", "notice", "info", "debug"]
@@ -82,6 +85,8 @@ def ingest_logs(
         result = log_collection().bulk_write(operations, ordered=True)
     except PyMongoError:
         raise HTTPException(503, "MongoDB log storage is unavailable") from None
+    if settings.features.incident_workspace and result.upserted_count:
+        notify_change()
     return {"inserted": result.upserted_count, "received": len(payload.entries)}
 
 
@@ -90,11 +95,31 @@ def read_logs(
     source: str | None = Query(default=None, max_length=255),
     severity: Severity | None = None,
     limit: int = Query(default=100, ge=1, le=200),
+    q: str | None = Query(default=None, min_length=1, max_length=120),
+    start: AwareDatetime | None = None,
+    end: AwareDatetime | None = None,
     _: User = Depends(get_current_user),
 ) -> list[LogEntry]:
-    filters = {key: value for key, value in {"source": source, "severity": severity}.items() if value is not None}
+    filters: dict[str, Any] = {key: value for key, value in {"source": source, "severity": severity}.items() if value is not None}
+    if start is not None or end is not None:
+        filters["timestamp"] = {key: value for key, value in (("$gte", start), ("$lte", end)) if value is not None}
+    if q and not settings.features.incident_workspace:
+        filters["message"] = {"$regex": re.escape(q), "$options": "i"}
     try:
-        rows = list(log_collection().find(filters).sort("timestamp", DESCENDING).limit(limit))
+        cursor = log_collection().find(filters).sort("timestamp", DESCENDING)
+        if q and settings.features.incident_workspace:
+            # Match the same sanitized text that callers can read.
+            rows = []
+            for row in cursor.limit(2000):
+                if q.casefold() in redact(row["message"]).casefold():
+                    rows.append(row)
+                if len(rows) == limit:
+                    break
+        else:
+            rows = list(cursor.limit(limit))
     except PyMongoError:
         raise HTTPException(503, "MongoDB log storage is unavailable") from None
-    return [LogEntry(event_id=row["_id"], **row) for row in rows]
+    return [LogEntry(event_id=row["_id"], timestamp=row["timestamp"], severity=row["severity"],
+                     source=redact(row["source"]) if settings.features.incident_workspace else row["source"],
+                     message=redact(row["message"]) if settings.features.incident_workspace else row["message"])
+            for row in rows]

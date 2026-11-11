@@ -25,6 +25,8 @@ from zaddesh_core.models.alerts import (
     Acknowledgement,
 )
 from zaddesh_core.models.snmp import SnmpMib, SnmpTrap
+from zaddesh_core.models.incidents import Incident, IncidentTimeline, IncidentParent, IncidentFilter, IncidentDelivery
+from zaddesh_core.models.topology import TopologyDiagram, TopologyNode, TopologyLink, TopologyRun, TopologyChange
 from zaddesh_core.models.system import (
     Dashboard,
     Widget,
@@ -62,6 +64,16 @@ __all__ = [
     "SnmpMib",
     "SnmpTrap",
     "Dashboard",
+    "Incident",
+    "IncidentTimeline",
+    "IncidentParent",
+    "IncidentFilter",
+    "IncidentDelivery",
+    "TopologyDiagram",
+    "TopologyNode",
+    "TopologyLink",
+    "TopologyRun",
+    "TopologyChange",
     "Widget",
     "SavedView",
     "Report",

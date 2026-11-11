@@ -5,13 +5,16 @@ import asyncio
 from threading import Lock
 import time
 from typing import Annotated
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Security
+from fastapi import APIRouter, Depends, HTTPException, Request, Security, WebSocket, WebSocketDisconnect
+from starlette.concurrency import run_in_threadpool
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 
 from zaddesh_core.api.deps import get_current_user, security_bearer
 from zaddesh_core.database import SessionLocal
+from zaddesh_core.config import settings
 
 router = APIRouter(tags=["Live updates"])
 _state = Lock()
@@ -67,3 +70,49 @@ async def live_updates(request: Request, _: Annotated[None, Depends(authenticate
 
     return StreamingResponse(events(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"})
+
+
+@router.websocket("/addon-updates")
+async def addon_updates(socket: WebSocket):
+    global _clients
+    origin = socket.headers.get("origin")
+    offered = socket.scope.get("subprotocols", [])
+    if (not (settings.features.incident_workspace or settings.features.network_diagram_beta)
+        or (origin and urlsplit(origin).netloc != socket.headers.get("host"))
+        or len(offered) != 2 or offered[0] != "zaddesh-v1"):
+        await socket.close(code=1008)
+        return
+    try:
+        await run_in_threadpool(authenticate_stream, HTTPAuthorizationCredentials(scheme="Bearer", credentials=offered[1]))
+    except HTTPException:
+        await socket.close(code=1008)
+        return
+    with _state:
+        available = _clients < 64
+        seen = _revision
+        if available:
+            _clients += 1
+    if not available:
+        await socket.close(code=1013)
+        return
+    try:
+        await socket.accept(subprotocol="zaddesh-v1")
+        await socket.send_json({"event": "ready"})
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            try:
+                if (await asyncio.wait_for(socket.receive(), .75))["type"] == "websocket.disconnect":
+                    return
+            except asyncio.TimeoutError:
+                pass
+            with _state:
+                current = _revision
+            if current != seen:
+                await socket.send_json({"event": "change"})
+                seen = current
+        await socket.close()
+    except (WebSocketDisconnect, OSError):
+        pass
+    finally:
+        with _state:
+            _clients -= 1

@@ -15,6 +15,7 @@ from zaddesh_core.models.metrics import MetricRaw
 from zaddesh_core.models.infrastructure import Collector, Device
 from zaddesh_core.models.alerts import Alert, Event
 from zaddesh_core.config import settings
+from zaddesh_core.incidents import record_availability
 from zaddesh_core.models.checks import Check, CheckState
 from zaddesh_core.models.auth import User
 from zaddesh_core.schemas.metric import (
@@ -64,6 +65,7 @@ def ingest_metrics(
     availability = {"icmp": "icmp.availability", "tcp": "tcp.available", "snmp": "snmp.available",
                     "http": "http.available", "https": "http.available"}
     observations: dict[int, tuple[datetime.datetime, bool]] = {}
+    incident_samples: dict[int, dict[datetime.datetime, bool]] = {}
     records = []
     now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     for point in payload.points:
@@ -78,6 +80,9 @@ def ingest_metrics(
                             metric_key=point.metric_key, timestamp=timestamp,
                             value=point.value, tags=point.tags))
         if check and check.is_enabled and availability.get(check.check_type) == point.metric_key:
+            if settings.features.incident_workspace:
+                samples = incident_samples.setdefault(check.id, {})
+                samples[timestamp] = samples.get(timestamp, True) and point.value == 1.0
             previous = observations.get(check.id)
             if previous is None or timestamp > previous[0]:
                 observations[check.id] = (timestamp, point.value == 1.0)
@@ -114,6 +119,13 @@ def ingest_metrics(
         if state.last_check_time is not None and timestamp <= state.last_check_time:
             continue  # A late sample may be queried but must not rewind current health.
         check = checks[state.check_id]
+        if settings.features.incident_workspace:
+            previous_status = state.current_status
+            for at, available in sorted(incident_samples[state.check_id].items()):
+                if state.last_check_time is None or at > state.last_check_time:
+                    record_availability(db, check, devices[check.device_id], previous_status, available, at)
+                    previous_status = "ok" if available else "critical"
+                    ok = available
         touched.add(check.device_id)
         new_status = "ok" if ok else "critical"
         state.last_check_time = timestamp
@@ -123,6 +135,8 @@ def ingest_metrics(
             continue
         state.current_status = new_status
         state.last_change_time = timestamp
+        if settings.features.incident_workspace:
+            continue
         title = f"Availability: {check.name}"
         open_alert = open_alerts.get((check.id, title))
         if not ok and open_alert is None:
@@ -148,6 +162,10 @@ def ingest_metrics(
                 device.status = ("warning" if "ok" in statuses else "down") if "critical" in statuses else (
                     "up" if "ok" in statuses else "unknown"
                 )
+    if settings.features.incident_workspace and settings.features.event_retention_days:
+        db.query(Event).filter(Event.timestamp < now - datetime.timedelta(
+            days=settings.features.event_retention_days,
+        )).delete()
     db.commit()
     notify_change()
     return {"ingested": inserted, "duplicates": len(records) - inserted, "status": "success"}

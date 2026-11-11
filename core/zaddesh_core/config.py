@@ -58,6 +58,14 @@ class LogsConfig(BaseModel):
     retention_days: int = Field(default=30, ge=1, le=3650)
 
 
+class FeaturesConfig(BaseModel):
+    incident_workspace: bool = False
+    network_diagram_beta: bool = False
+    topology_allowed_ranges: list[str] = Field(default_factory=list)
+    event_retention_days: int = Field(default=0, ge=0, le=3650)
+    incident_webhook_url: str | None = Field(default=None, repr=False)
+
+
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     format: str = "json"
@@ -103,6 +111,7 @@ class AppSettings(BaseSettings):
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     collector: CollectorConfig = Field(default_factory=CollectorConfig)
     logs: LogsConfig = Field(default_factory=LogsConfig)
+    features: FeaturesConfig = Field(default_factory=FeaturesConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
