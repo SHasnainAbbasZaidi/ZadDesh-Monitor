@@ -35,3 +35,12 @@ To receive incident notifications, set `ZADDESH_FEATURES__INCIDENT_WEBHOOK_URL` 
 Inventory health and alert counts update from the core. Link state and utilization update when discovery observes the interfaces. Utilization needs two valid counter samples. Renamed nodes and saved layout positions persist through rediscovery. A node may appear without links when its device exposes SNMP but reports no LLDP or CDP neighbors.
 
 For a separate discovery process, run the collector with `--topology-only` and an existing individual collector token. This mode processes topology jobs only. The normal collector can continue handling scheduled checks, metrics and heartbeats.
+
+## Connect Zabbix
+
+1. As an Admin, go to **Settings → Zabbix connection**. Enter the Zabbix frontend HTTPS URL and paste an API token for an account with read access to the required host groups. Allow `host.get`, `problem.get`, and `item.get` in the Zabbix role. The core must trust the Zabbix server’s TLS certificate.
+2. Choose **Test and save**. ZadDesh checks the API version and verifies host, item and problem reads before saving the encrypted token.
+3. Open **Devices → Zabbix devices** to see the external host inventory and unresolved Zabbix problems. New hosts visible to the token appear on refresh. The external list refreshes every minute while open.
+4. Under **Validate ICMP reachability**, select a ZadDesh device and a Zabbix host with the same IP. The Zabbix host needs an enabled `icmpping` item. The comparison reports each source’s latest comparable status and sample time. A match requires equal reachability readings within two minutes of each other.
+
+ZadDesh reads the external inventory and problems through the Zabbix API. Those hosts are displayed in the Zabbix view. Add a ZadDesh device and ICMP check when you need an independent comparison.

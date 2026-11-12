@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Card } from '../components/ui/Card';
 import { UserManagement } from '../components/ui/UserManagement';
+import { ZabbixSettings } from '../components/ui/Zabbix';
 import { api } from '../services/api';
 import type { SystemInfo } from '../types';
 
@@ -19,6 +20,7 @@ export function Settings() {
       <p className="ops-muted mt-2">Manage accounts and review the core runtime.</p>
     </header>
     <UserManagement />
+    <ZabbixSettings />
     {error && <p role="alert" className="ops-notice">Could not read runtime information from the core.</p>}
     <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
       <Card title="Runtime" subtitle={info ? 'Reported by the core' : error ? 'Unavailable' : 'Loading'}>

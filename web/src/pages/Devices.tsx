@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { ZabbixDevices } from '../components/ui/Zabbix';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
@@ -41,6 +42,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
   const [snmpMetrics, setSnmpMetrics] = useState<{ key: string; unit: string; points: MetricSeriesData[] }[]>([]);
   const [range, setRange] = useState(120);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [showZabbix, setShowZabbix] = useState(false);
   const [sites, setSites] = useState<Site[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -199,6 +201,14 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
     return matchesSearch && matchesStatus;
   });
 
+  if (isAdmin && showZabbix) return <section className="space-y-4">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <h1 className="ops-heading">Zabbix devices</h1>
+      <button className="ops-button" onClick={() => setShowZabbix(false)}>Back to monitored devices</button>
+    </div>
+    <ZabbixDevices devices={devices} />
+  </section>;
+
   return (
     <div className="space-y-6">
       {/* Top Header */}
@@ -212,6 +222,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
           </p>
         </div>
         <div className="flex items-center space-x-3">
+          {isAdmin && <button className="ops-button" onClick={() => setShowZabbix(true)}>Zabbix devices</button>}
           <button
             aria-label="Refresh devices"
             onClick={loadDevices}
