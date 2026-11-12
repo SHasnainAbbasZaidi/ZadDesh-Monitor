@@ -231,8 +231,10 @@ export function NetworkDiagramWidget() {
     {current?.diagram && (current.diagram.nodes.length ? <Suspense fallback={<p role="status">Loading diagram…</p>}>
       <Graph diagram={current.diagram} height={current.settings?.height} labels={current.settings?.labels} />
     </Suspense> : <p className="ops-empty">No devices match this widget’s filters.</p>)}
-    <details onToggle={event => { if (event.currentTarget.open) setDraft(current?.settings ?? defaultWidget); }}>
-      <summary className="cursor-pointer">{current?.settings ? 'Edit diagram widget' : 'Add diagram widget'}</summary>
+    <details>
+      <summary className="cursor-pointer" onClick={() => setDraft(current?.settings ?? defaultWidget)}>
+        {current?.settings ? 'Edit diagram widget' : 'Add diagram widget'}
+      </summary>
       <form className="flex flex-wrap items-end gap-3 py-2" onSubmit={async event => {
         event.preventDefault();
         try {
