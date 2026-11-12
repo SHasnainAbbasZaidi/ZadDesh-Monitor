@@ -54,6 +54,28 @@ export interface DeviceStats {
   unmanaged: number;
 }
 
+export interface FleetOverview {
+  stats: DeviceStats;
+  devices: { id: string; name: string; ip: string; site_id: number | null; status: Device['status']; status_label?: string; source: 'zaddesh' | 'zabbix' }[];
+  zabbix_unavailable?: boolean;
+}
+
+export interface IncidentPreview {
+  id: string;
+  title: string;
+  severity: string;
+  timestamp: string;
+  category?: 'device_offline' | 'link_down' | 'other';
+  device?: string;
+  message?: string;
+}
+
+export interface IncidentPreviewSummary {
+  total: number;
+  entries: IncidentPreview[];
+  incomplete?: boolean;
+}
+
 export interface Check {
   id: number;
   device_id: number;

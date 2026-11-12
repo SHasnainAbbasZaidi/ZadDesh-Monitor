@@ -30,15 +30,22 @@ test('Zabbix settings and read-only device view', async ({ page, request }) => {
       await route.fulfill({ json: { configured: saved, api_url: saved ? url : null, version: saved ? '7.4.1' : null } });
     } else if (path === 'inventory') {
       await route.fulfill({ json: { configured: true, hosts: [
-        { hostid: '7', host: 'external-switch', name: 'External switch', status: '0', active_available: '1', local_device_ids: [local.id],
+        { hostid: '7', host: 'external-switch', name: 'External switch', status: '0', health_status: 'up', health_label: 'Available', local_device_ids: [local.id],
           interfaces: [{ ip: '192.0.2.10', useip: '1', available: '0' }] },
         { hostid: '8', host: 'zabbix-only', name: 'Zabbix-only switch', status: '0', local_device_ids: [],
-          agent_reporting_at: timestamp,
+          health_status: 'up', health_label: 'Agent reporting',
           interfaces: [{ ip: '192.0.2.12', useip: '1', available: '0' }] },
+      ] } });
+    } else if (path === 'fleet') {
+      await route.fulfill({ json: { stats: { total_devices: 3, up: 2, down: 0, warning: 0, unknown: 1, unmanaged: 0 }, devices: [
+        { id: 'zabbix-7', name: 'External switch', ip: '192.0.2.10', site_id: null, status: 'up', status_label: 'Available', source: 'zabbix' },
+        { id: 'zabbix-8', name: 'Zabbix-only switch', ip: '192.0.2.12', site_id: null, status: 'up', status_label: 'Agent reporting', source: 'zabbix' },
+        { id: 'local-only', name: 'Local-only switch', ip: '192.0.2.11', site_id: null, status: 'unknown', source: 'zaddesh' },
       ] } });
     } else if (path === 'hosts') {
       await route.fulfill({ json: { hosts: [{ hostid: '7', host: 'external-switch', name: 'External switch', status: '0',
-        local_device_ids: [local.id], interfaces: [{ ip: '192.0.2.10', useip: '1' }] }], limited: false } });
+        health_status: 'up', health_label: 'Available', local_device_ids: [local.id],
+        interfaces: [{ ip: '192.0.2.10', useip: '1' }] }], limited: false } });
     } else if (path === 'import') {
       expect(route.request().method()).toBe('POST');
       expect(new URL(route.request().url()).pathname).toBe('/api/v1/zabbix/hosts/8/import');
@@ -59,6 +66,8 @@ test('Zabbix settings and read-only device view', async ({ page, request }) => {
   await page.getByLabel('Username').fill('zabbix-admin');
   await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
+  await expect(page.getByRole('button', { name: /Total devices/ })).toContainText('3');
+  await expect(page.getByRole('row').filter({ hasText: 'Zabbix-only switch' })).toContainText('Agent reporting');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByLabel('Zabbix URL').fill(url);
   await expect(page.getByText('HTTP sends the token unencrypted between ZadDesh and Zabbix.')).toBeVisible();

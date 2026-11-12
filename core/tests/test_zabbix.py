@@ -16,7 +16,7 @@ from zaddesh_core import zabbix
 from zaddesh_core.api.v1 import zabbix as routes
 from zaddesh_core.config import settings
 from zaddesh_core.incidents import utc_now
-from zaddesh_core.models.infrastructure import DeviceCredential
+from zaddesh_core.models.infrastructure import Device, DeviceCredential
 from zaddesh_core.models.metrics import MetricRaw
 from zaddesh_core.models.zabbix import ZabbixConnection
 from zaddesh_core.security import decrypt_secret, encrypt_secret
@@ -237,6 +237,10 @@ def test_agent_availability_and_incident_feed(client, db_session, admin_headers,
     token = token_hex(32)
     db_session.add(ZabbixConnection(id=1, api_url="http://192.0.2.19/api_jsonrpc.php",
                                     encrypted_token=encrypt_secret(token), version="7.0.32"))
+    db_session.add_all([
+        Device(name="Local copy", ip="192.0.2.21", status="unknown"),
+        Device(name="Local-only device", ip="192.0.2.44", status="warning"),
+    ])
     db_session.commit()
     now = utc_now().replace(microsecond=0, tzinfo=timezone.utc)
     clock = int(now.timestamp()) - 10
@@ -254,7 +258,8 @@ def test_agent_availability_and_incident_feed(client, db_session, admin_headers,
         if method == "host.get":
             assert "active_available" in params["output"]
             rows = [{"hostid": str(i), "name": f"Agent {i}", "status": "0", "active_available": active,
-                     "interfaces": [{"available": "0"}]} for i, active in enumerate(("1", "0", "0"), 1)]
+                     "interfaces": [{"available": "0", "ip": f"192.0.2.{20 + i}", "useip": "1", "main": "1"}]}
+                    for i, active in enumerate(("1", "0", "0"), 1)]
         elif method == "item.get":
             assert params["hostids"] == ["2", "3"]
             rows = [{"hostid": "2", "lastclock": str(clock), "delay": "1m"},
@@ -275,6 +280,10 @@ def test_agent_availability_and_incident_feed(client, db_session, admin_headers,
     assert rows[0]["active_available"] == "1"
     assert rows[1]["agent_reporting_at"]
     assert rows[2]["agent_reporting_at"] is None
+    fleet = client.get("/api/v1/zabbix/fleet", headers=viewer_headers).json()
+    assert fleet["stats"] == {"total_devices": 4, "up": 2, "warning": 1, "down": 0, "unknown": 1, "unmanaged": 0}
+    assert "Local copy" not in {row["name"] for row in fleet["devices"]}
+    assert next(row for row in fleet["devices"] if row["name"] == "Agent 2")["status_label"] == "Agent reporting"
     base = "/api/v1/incidents"
     feed = base + "/zabbix"
     critical = client.get(feed + "?category=critical", headers=viewer_headers).json()["entries"]

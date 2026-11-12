@@ -10,6 +10,7 @@ import { Settings } from './pages/Settings';
 import { Logs } from './pages/Logs';
 import { api, request } from './services/api';
 import { IncidentWorkspace } from './pages/IncidentWorkspace';
+import type { IncidentPreview, IncidentPreviewSummary } from './types';
 
 const NetworkDiagram = lazy(() => import('./pages/NetworkDiagram'));
 const NetworkDiagramWidget = lazy(() => import('./pages/NetworkDiagram').then(module => ({ default: module.NetworkDiagramWidget })));
@@ -17,45 +18,61 @@ const NetworkDiagramWidget = lazy(() => import('./pages/NetworkDiagram').then(mo
 export const AppContent: React.FC = () => {
   const { user, isLoading, isSetupRequired } = useAuth();
   const [currentTab, setCurrentTab] = useState('overview');
-  const [activeAlertsCount, setActiveAlertsCount] = useState(0);
-  const [zabbixCriticalCount, setZabbixCriticalCount] = useState(0);
+  const [localIncidents, setLocalIncidents] = useState<IncidentPreviewSummary>();
+  const [zabbixIncidents, setZabbixIncidents] = useState<IncidentPreviewSummary>();
+  const [incidentRefresh, setIncidentRefresh] = useState(0);
   const [demoMode, setDemoMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [features, setFeatures] = useState({ incident_workspace: false, network_diagram_beta: false });
+  const [features, setFeatures] = useState<{ incident_workspace: boolean; network_diagram_beta: boolean }>();
+  const incidentWorkspace = features?.incident_workspace;
 
   useEffect(() => {
     if (!user) return;
     api.getSystemInfo().then(info => setDemoMode(info.environment === "demo")).catch(() => {});
-    request<typeof features>('/features').then(setFeatures).catch(() => {});
+    request<NonNullable<typeof features>>('/features').then(setFeatures)
+      .catch(() => setFeatures({ incident_workspace: false, network_diagram_beta: false }));
   }, [user]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || incidentWorkspace === undefined) return;
     let active = true;
-    const fetchBadge = () => {
-      const count = features.incident_workspace
-        ? request<{ total: number }>('/incidents/alerts?view=current&category=critical&limit=1&include_count=true')
-          .then(result => result.total)
-        : api.getAlerts('active').then(alerts => alerts.length);
-      void count.then(total => { if (active) setActiveAlertsCount(total); }).catch(() => {});
+    const fetchIncidents = () => {
+      const preview = incidentWorkspace
+        ? request<{ total: number; alerts: (Omit<IncidentPreview, 'id' | 'timestamp'> & { id: number; started_at: string })[] }>(
+          '/incidents/alerts?view=current&category=critical&limit=8&include_count=true')
+          .then(result => ({ total: result.total, entries: result.alerts.map(row => ({
+            ...row, id: `local-${row.id}`, timestamp: row.started_at,
+          })) }))
+        : api.getAlerts('active').then(alerts => ({ total: alerts.length, entries: alerts.slice(0, 8).map(row => ({
+          ...row, id: `local-${row.id}`, timestamp: row.triggered_at,
+        })) }));
+      void preview.then(result => { if (active) setLocalIncidents(result); }).catch(() => {
+        if (active) setLocalIncidents(previous => previous && { ...previous, incomplete: true });
+      });
     };
-    fetchBadge();
-    const interval = setInterval(fetchBadge, 15000);
+    fetchIncidents();
+    const interval = setInterval(fetchIncidents, 15000);
     return () => { active = false; clearInterval(interval); };
-  }, [user, features.incident_workspace]);
+  }, [user, incidentWorkspace, incidentRefresh]);
 
   useEffect(() => {
-    if (!user || !features.incident_workspace) return;
+    if (!user || !incidentWorkspace) return;
     const controller = new AbortController();
     function refresh() {
-      void request<{ entries: unknown[] }>('/incidents/zabbix?category=critical', { signal: controller.signal })
-        .then(value => { if (!controller.signal.aborted) setZabbixCriticalCount(value.entries.length); })
-        .catch(() => {});
+      void request<{ total: number; entries: IncidentPreview[]; scan_limited: boolean }>(
+        '/incidents/zabbix?category=critical', { signal: controller.signal })
+        .then(result => { if (!controller.signal.aborted) setZabbixIncidents({
+          total: result.total, entries: result.entries.map(row => ({ ...row, id: `zabbix-${row.id}` })),
+          incomplete: result.scan_limited,
+        }); })
+        .catch(() => { if (!controller.signal.aborted) setZabbixIncidents(previous => ({
+          total: previous?.total ?? 0, entries: previous?.entries ?? [], incomplete: true,
+        })); });
     }
     refresh();
     const timer = window.setInterval(refresh, 60_000);
     return () => { controller.abort(); window.clearInterval(timer); };
-  }, [user, features.incident_workspace]);
+  }, [user, incidentWorkspace, incidentRefresh]);
 
   if (isLoading) {
     return (
@@ -76,6 +93,12 @@ export const AppContent: React.FC = () => {
 
   const admin = user.role === 'admin';
   const tab = admin || ['overview', 'logs', 'alerts'].includes(currentTab) ? currentTab : 'overview';
+  const remote = incidentWorkspace ? zabbixIncidents : undefined;
+  const incidents = localIncidents && {
+    total: localIncidents.total + (remote?.total ?? 0),
+    entries: [...localIncidents.entries, ...(remote?.entries ?? [])].sort((a, b) => b.timestamp.localeCompare(a.timestamp)).slice(0, 8),
+    incomplete: localIncidents.incomplete || (incidentWorkspace && (!remote || remote.incomplete)),
+  };
   return (
     <AppLayout
       currentTab={tab}
@@ -83,8 +106,8 @@ export const AppContent: React.FC = () => {
         setCurrentTab(tab);
         setSearchQuery('');
       }}
-      activeAlertsCount={activeAlertsCount + (features.incident_workspace ? zabbixCriticalCount : 0)}
-      networkDiagram={features.network_diagram_beta}
+      activeAlertsCount={incidents?.total ?? 0}
+      networkDiagram={features?.network_diagram_beta}
       onSearchChange={admin ? (query) => {
         setSearchQuery(query);
         if (query && currentTab !== 'devices') {
@@ -95,16 +118,19 @@ export const AppContent: React.FC = () => {
       {demoMode && <div className="ops-notice" role="status"><strong>Demo workspace</strong> Sample devices, metrics, and incidents. Collection is disabled.</div>}
       {tab === 'overview' && (
         <Overview
+          incidents={incidents}
+          criticalOnly={incidentWorkspace === true}
+          onRefreshIncidents={() => setIncidentRefresh(value => value + 1)}
           onNavigateToDevices={admin ? () => setCurrentTab('devices') : undefined}
           onNavigateToAlerts={() => setCurrentTab('alerts')}
         />
       )}
-      {tab === 'overview' && features.network_diagram_beta && <Suspense><NetworkDiagramWidget /></Suspense>}
-      {tab === 'network-diagram' && admin && features.network_diagram_beta && <Suspense><NetworkDiagram /></Suspense>}
+      {tab === 'overview' && features?.network_diagram_beta && <Suspense><NetworkDiagramWidget /></Suspense>}
+      {tab === 'network-diagram' && admin && features?.network_diagram_beta && <Suspense><NetworkDiagram /></Suspense>}
       {tab === 'devices' && <Devices searchQuery={searchQuery} />}
       {tab === 'checks' && <Checks />}
-      {tab === 'alerts' && (features.incident_workspace ? <IncidentWorkspace /> : <Alerts />)}
-      {tab === 'logs' && (features.incident_workspace ? <IncidentWorkspace initialTab="logs" /> : <Logs />)}
+      {tab === 'alerts' && (incidentWorkspace ? <IncidentWorkspace /> : <Alerts />)}
+      {tab === 'logs' && (incidentWorkspace ? <IncidentWorkspace initialTab="logs" /> : <Logs />)}
       {tab === 'settings' && <Settings />}
     </AppLayout>
   );

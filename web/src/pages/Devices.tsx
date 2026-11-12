@@ -276,7 +276,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
 
       {/* Filter Tabs */}
       <div className="flex items-center space-x-2 overflow-x-auto pb-1">
-        {['all', 'up', 'down', 'warning', 'unknown'].map((st) => (
+        {['all', 'up', 'down', 'warning', 'unknown', 'unmanaged'].map((st) => (
           <button
             key={st}
             onClick={() => setFilterStatus(st)}

@@ -3,14 +3,11 @@ import { Activity, ArrowRight, Bell, CircleCheck, CircleHelp, CircleX, Clock3, N
 import { Badge } from '../components/ui/Badge';
 import { EntryDetails, incidentTitle } from '../components/ui/EntryDetails';
 import { OverviewLatency } from '../components/ui/OverviewLatency';
-import { api } from '../services/api';
+import { api, request } from '../services/api';
 import { useLiveUpdates } from '../services/live';
-import type { Alert, Device, DeviceStats, Site, SystemEvent } from '../types';
+import type { DeviceStats, FleetOverview, IncidentPreviewSummary, Site, SystemEvent } from '../types';
 
 interface Snapshot {
-  stats: DeviceStats;
-  devices: Device[];
-  alerts: Alert[];
   events: SystemEvent[];
   sites: Site[];
   received: Date;
@@ -20,11 +17,9 @@ const health = [
   { key: 'up', label: 'Healthy', icon: CircleCheck },
   { key: 'warning', label: 'Degraded', icon: TriangleAlert },
   { key: 'down', label: 'Down', icon: CircleX },
-  { key: 'unknown', label: 'Unknown', icon: CircleHelp },
+  { key: 'unknown', label: 'No availability data', icon: CircleHelp },
   { key: 'unmanaged', label: 'Unmanaged', icon: Server },
 ] as const;
-
-const emptyDevices: Device[] = [];
 
 function FleetRing({ stats }: { stats?: DeviceStats }) {
   const total = stats?.total_devices ?? 0;
@@ -53,7 +48,10 @@ function eventTime(value: string) {
   return Number.isNaN(time.getTime()) ? '—' : timeFormat.format(time);
 }
 
-export function Overview({ onNavigateToDevices, onNavigateToAlerts }: {
+export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNavigateToDevices, onNavigateToAlerts }: {
+  incidents?: IncidentPreviewSummary;
+  criticalOnly: boolean;
+  onRefreshIncidents: () => void;
   onNavigateToDevices?: () => void;
   onNavigateToAlerts: () => void;
 }) {
@@ -61,6 +59,10 @@ export function Overview({ onNavigateToDevices, onNavigateToAlerts }: {
   const [failed, setFailed] = useState(false);
   const [paused, setPaused] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  const [fleetRefresh, setFleetRefresh] = useState(0);
+  const [fleet, setFleet] = useState<FleetOverview & { received: Date }>();
+  const [fleetFailed, setFleetFailed] = useState(false);
+  const [pausedIncidents, setPausedIncidents] = useState<IncidentPreviewSummary>();
   const [minutes, setMinutes] = useState(60);
   const [siteFilter, setSiteFilter] = useState('all');
   const connection = useLiveUpdates(() => setRefresh(value => value + 1), paused);
@@ -71,11 +73,9 @@ export function Overview({ onNavigateToDevices, onNavigateToAlerts }: {
     let timer: number | undefined;
     async function poll() {
       try {
-        const [stats, devices, alerts, events, sites] = await Promise.all([
-          api.getDeviceStats(), api.getDevices(), api.getAlerts('active'), api.getEvents(8), api.getSites(),
-        ]);
+        const [events, sites] = await Promise.all([api.getEvents(8), api.getSites()]);
         if (active) {
-          setSnapshot({ stats, devices, alerts, events, sites, received: new Date() });
+          setSnapshot({ events, sites, received: new Date() });
           setFailed(false);
         }
       } catch {
@@ -88,19 +88,50 @@ export function Overview({ onNavigateToDevices, onNavigateToAlerts }: {
     return () => { active = false; window.clearTimeout(timer); };
   }, [paused, refresh]);
 
-  const stats = snapshot?.stats;
+  useEffect(() => {
+    if (paused) return;
+    const controller = new AbortController();
+    let timer: number | undefined;
+    async function loadFleet() {
+      try {
+        const result = await request<FleetOverview>('/zabbix/fleet', { signal: controller.signal });
+        if (!controller.signal.aborted) {
+          setFleet(previous => result.zabbix_unavailable && previous && !previous.zabbix_unavailable
+            ? previous : { ...result, received: new Date() });
+          setFleetFailed(Boolean(result.zabbix_unavailable));
+        }
+      } catch {
+        if (!controller.signal.aborted) setFleetFailed(true);
+      } finally {
+        if (!controller.signal.aborted) timer = window.setTimeout(loadFleet, 30_000);
+      }
+    }
+    void loadFleet();
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, [paused, fleetRefresh]);
+
+  function refreshDashboard() {
+    setRefresh(value => value + 1);
+    setFleetRefresh(value => value + 1);
+    onRefreshIncidents();
+  }
+
+  const incidentData = paused ? pausedIncidents : incidents;
+  const incidentLabel = criticalOnly ? 'Critical incidents' : 'Active incidents';
+  const stats = fleet?.stats;
   const total = stats?.total_devices ?? 0;
   const issue = stats ? stats.down + stats.warning : 0;
-  const devices = snapshot?.devices ?? emptyDevices;
+  const devices = fleet?.devices ?? [];
   const sites = new Map(snapshot?.sites.map(site => [site.id, site.name]));
   const visibleDevices = devices.filter(device => siteFilter === 'all' || String(device.site_id ?? 'unassigned') === siteFilter);
   const live = !paused && !failed && connection === 'connected';
 
   const statCards = [
-    { label: 'Total devices', value: stats?.total_devices, icon: Server, tone: 'accent', hint: 'Registered inventory', action: onNavigateToDevices },
-    { label: 'Healthy', value: stats?.up, icon: CircleCheck, tone: 'up', hint: 'Passing checks', action: onNavigateToDevices },
+    { label: 'Total devices', value: stats?.total_devices, icon: Server, tone: 'accent', hint: 'Combined inventory', action: onNavigateToDevices },
+    { label: 'Healthy', value: stats?.up, icon: CircleCheck, tone: 'up', hint: 'Available devices', action: onNavigateToDevices },
     { label: 'Needs attention', value: stats ? issue : undefined, icon: TriangleAlert, tone: 'warning', hint: 'Down or degraded', action: onNavigateToDevices },
-    { label: 'Active incidents', value: snapshot?.alerts.length, icon: Bell, tone: 'down', hint: 'Unacknowledged alerts', action: onNavigateToAlerts },
+    { label: incidentLabel, value: incidentData?.total, icon: Bell, tone: 'down',
+      hint: incidentData?.incomplete ? 'Some incident data is unavailable' : criticalOnly ? 'Current outages' : 'Unacknowledged alerts', action: onNavigateToAlerts },
   ];
 
   return (
@@ -121,8 +152,11 @@ export function Overview({ onNavigateToDevices, onNavigateToAlerts }: {
               <option value={360}>Last 6 hours</option><option value={1440}>Last 24 hours</option>
             </select>
           </div>
-          <button className="ops-button dash-icon-button" aria-label="Refresh dashboard" title="Refresh dashboard" disabled={paused} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={15} /></button>
-          <button className="ops-button dash-icon-button" aria-label={paused ? 'Resume refresh' : 'Pause refresh'} title={paused ? 'Resume refresh' : 'Pause refresh'} onClick={() => setPaused(!paused)}>
+          <button className="ops-button dash-icon-button" aria-label="Refresh dashboard" title="Refresh dashboard" disabled={paused} onClick={refreshDashboard}><RefreshCw size={15} /></button>
+          <button className="ops-button dash-icon-button" aria-label={paused ? 'Resume refresh' : 'Pause refresh'} title={paused ? 'Resume refresh' : 'Pause refresh'} onClick={() => {
+            if (!paused) setPausedIncidents(incidents);
+            setPaused(!paused);
+          }}>
             {paused ? <Play size={15} /> : <Pause size={15} />}
           </button>
         </div>
@@ -130,10 +164,10 @@ export function Overview({ onNavigateToDevices, onNavigateToAlerts }: {
 
       {failed && <div role="status" className="ops-notice">
         <TriangleAlert size={18} /><span>{snapshot ? 'Update failed. Showing the last received snapshot.' : 'Could not load infrastructure data.'}</span>
-        <button className="ops-button" onClick={() => { setPaused(false); setRefresh(value => value + 1); }}>Retry</button>
+        <button className="ops-button" onClick={() => { setPaused(false); refreshDashboard(); }}>Retry</button>
       </div>}
 
-      <section className="dash-stat-grid" aria-label="Infrastructure summary" aria-busy={!stats && !failed}>
+      <section className="dash-stat-grid" aria-label="Infrastructure summary" aria-busy={!stats && !fleetFailed}>
         {statCards.map(({ label, value, icon: Icon, tone, hint, action }) => {
           const Item = action ? 'button' : 'div';
           return <Item type={action ? 'button' : undefined} className="dash-stat" data-tone={tone} key={label} onClick={action}>
@@ -148,7 +182,7 @@ export function Overview({ onNavigateToDevices, onNavigateToAlerts }: {
         <OverviewLatency minutes={minutes} updatedAt={snapshot?.received.getTime()} />
 
         <section className="dash-panel" aria-labelledby="fleet-title">
-          <header className="dash-panel-head"><div><h2 id="fleet-title"><Network size={16} /> Fleet health</h2><p>Current device status</p></div></header>
+          <header className="dash-panel-head"><div><h2 id="fleet-title"><Network size={16} /> Fleet health</h2><p>Current device status from ZadDesh and Zabbix</p></div></header>
           <div className="dash-panel-body">
             <div className="dash-fleet">
               <FleetRing stats={stats} />
@@ -160,8 +194,10 @@ export function Overview({ onNavigateToDevices, onNavigateToAlerts }: {
               </dl>
             </div>
             <div className="dash-fleet-foot" role="status">
-              <h2>{!stats ? (failed ? 'Health unavailable' : 'Loading health') : !total ? 'No devices configured' : issue ? `${issue} ${issue === 1 ? 'needs' : 'need'} attention` : stats.up ? 'No reported degradation' : 'Awaiting device checks'}</h2>
-              <p>{snapshot ? `Updated at ${eventTime(snapshot.received.toISOString())}` : 'Waiting for the monitoring API'}</p>
+              <h2>{!stats ? (fleetFailed ? 'Health unavailable' : 'Loading health') : !total ? 'No devices configured' : issue ? `${issue} ${issue === 1 ? 'needs' : 'need'} attention` : stats.up ? 'No reported degradation' : 'Awaiting device checks'}</h2>
+              <p>{fleetFailed ? (fleet?.zabbix_unavailable ? 'Zabbix is unavailable. Showing local device status.'
+                : fleet ? 'Fleet refresh failed. Showing the last received status.' : 'Could not load fleet status.')
+                : fleet ? `Updated at ${eventTime(fleet.received.toISOString())}` : 'Waiting for the monitoring API'}</p>
             </div>
           </div>
         </section>
@@ -169,7 +205,7 @@ export function Overview({ onNavigateToDevices, onNavigateToAlerts }: {
         <section className="dash-panel" aria-labelledby="devices-title">
           <header className="dash-panel-head">
             <div><h2 id="devices-title"><Server size={16} /> Device inventory</h2>
-              <p>{total > devices.length ? `First ${devices.length} of ${total} devices` : 'Last reported device status by site'}</p></div>
+              <p>Last reported device status by site</p></div>
             {onNavigateToDevices && <button className="ops-button" onClick={onNavigateToDevices}>View devices <ArrowRight size={14} /></button>}
           </header>
           <div className="dash-panel-body">
@@ -186,26 +222,29 @@ export function Overview({ onNavigateToDevices, onNavigateToAlerts }: {
               <tbody>{visibleDevices.map(device => <tr key={device.id}>
                 <td><strong>{device.name}</strong><span className="font-mono">{device.ip}</span></td>
                 <td>{sites.get(device.site_id ?? -1) ?? 'Unassigned'}</td>
-                <td><Badge status={device.status} /></td>
+                <td><Badge status={device.status}>{device.status_label ?? (device.status === 'unknown' ? 'No availability data' : device.status)}</Badge></td>
               </tr>)}</tbody>
             </table></div> : <div className="dash-empty">
-              <Server size={21} /><strong>{snapshot ? devices.length ? 'No devices in this site' : 'Your inventory is empty' : 'Waiting for device inventory'}</strong>
-              {onNavigateToDevices && snapshot && !devices.length && <button className="ops-button" onClick={onNavigateToDevices}>Open Devices</button>}
+              <Server size={21} /><strong>{fleet ? devices.length ? 'No devices in this site' : 'Your inventory is empty'
+                : fleetFailed ? 'Device inventory unavailable' : 'Waiting for device inventory'}</strong>
+              {onNavigateToDevices && fleet && !devices.length && <button className="ops-button" onClick={onNavigateToDevices}>Open Devices</button>}
             </div>}
           </div>
         </section>
 
         <div className="dash-side-stack">
           <section className="dash-panel" aria-labelledby="incident-title">
-            <header className="dash-panel-head"><div><h2 id="incident-title"><Bell size={16} /> Active incidents</h2><p>{snapshot ? `${snapshot.alerts.length} unacknowledged` : 'Waiting for alert data'}</p></div>
+            <header className="dash-panel-head"><div><h2 id="incident-title"><Bell size={16} /> {incidentLabel}</h2>
+              <p>{incidentData ? `${incidentData.total} ${criticalOnly ? 'current' : 'unacknowledged'}${incidentData.entries.length < incidentData.total ? ` · Showing latest ${incidentData.entries.length}` : ''}` : 'Waiting for alert data'}</p></div>
               <button className="ops-button" onClick={onNavigateToAlerts}>Open alerts <ArrowRight size={14} /></button>
             </header>
             <div className="dash-panel-body">
-              {snapshot?.alerts.length ? <ul className="dash-feed">{snapshot.alerts.map(alert => <li key={alert.id}>
-                <EntryDetails title={incidentTitle(alert.title)}>
+              {incidentData?.entries.length ? <ul className="dash-feed">{incidentData.entries.map(alert => <li key={alert.id}>
+                <EntryDetails title={`${alert.category === 'device_offline' ? 'Device offline' : incidentTitle(alert.title)}${alert.device ? ` · ${alert.device}` : ''}`}>
                   <div>{alert.title}</div>{alert.message && <div>{alert.message}</div>}
                 </EntryDetails><Badge status={alert.severity} />
-              </li>)}</ul> : <p className="dash-empty"><CircleCheck size={20} />{snapshot ? 'No active incidents' : 'Waiting for incident data'}</p>}
+              </li>)}</ul> : <p className="dash-empty"><CircleCheck size={20} />{incidentData?.incomplete ? 'Incident data is incomplete'
+                : incidentData ? (criticalOnly ? 'No current critical incidents' : 'No active incidents') : 'Waiting for incident data'}</p>}
             </div>
           </section>
           <section className="dash-panel" aria-labelledby="activity-title">

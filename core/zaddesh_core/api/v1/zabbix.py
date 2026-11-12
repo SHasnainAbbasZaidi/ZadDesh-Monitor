@@ -14,7 +14,7 @@ from sqlalchemy import update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
-from zaddesh_core.api.deps import require_role
+from zaddesh_core.api.deps import get_current_user, require_role
 from zaddesh_core.database import get_db
 from zaddesh_core.incidents import redact, utc_now
 from zaddesh_core.models.auth import AuditLog, User
@@ -28,6 +28,7 @@ from zaddesh_core.zabbix_import import canonical_ip, duration, interface_target,
 
 admin = require_role(["admin"])
 router = APIRouter(prefix="/zabbix", tags=["Zabbix"], dependencies=[Depends(admin)])
+fleet_router = APIRouter(prefix="/zabbix", tags=["Zabbix"], dependencies=[Depends(get_current_user)])
 HostID = Annotated[str, StringConstraints(pattern=r"^\d{1,20}$")]
 HOST_FIELDS = {"output": ["hostid", "host", "name", "status"],
                "selectInterfaces": ["interfaceid", "ip", "dns", "useip", "main", "available"]}
@@ -81,13 +82,31 @@ def host_interfaces(row: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def visible_host(row: dict[str, Any], token: str) -> dict[str, Any]:
+    health, label = host_health(row)
     return {
         **{key: visible(row.get(key), token) for key in HOST_FIELDS["output"]},
         "interfaces": [{key: visible(item.get(key), token) for key in HOST_FIELDS["selectInterfaces"]}
                        for item in host_interfaces(row)],
         "active_available": visible(str(row.get("active_available", "0")), token),
         "agent_reporting_at": row.get("agent_reporting_at"),
+        "health_status": health,
+        "health_label": label,
     }
+
+
+def host_health(row: dict[str, Any]) -> tuple[str, str]:
+    if str(row.get("status")) != "0":
+        return "unmanaged", "Disabled"
+    states = {str(row.get("active_available")), *(str(item.get("available")) for item in host_interfaces(row))}
+    if {"1", "2"} <= states:
+        return "warning", "Mixed"
+    if "1" in states:
+        return "up", "Available"
+    if "2" in states:
+        return "down", "Unavailable"
+    if row.get("agent_reporting_at"):
+        return "up", "Agent reporting"
+    return "unknown", "No availability data"
 
 
 def source_key(url: str) -> str:
@@ -287,6 +306,36 @@ def read_inventory(db: Session = Depends(get_db)):
         rows = read_agent_hosts(api, {**HOST_FIELDS, "sortfield": "host"})
         annotate_agent_reporting(api, rows)
         return {"configured": True, "hosts": inventory_hosts(db, api, rows)}
+
+
+@fleet_router.get("/fleet")
+def fleet_overview(db: Session = Depends(get_db)):
+    local = {row.id: row for row in db.query(Device.id, Device.name, Device.ip, Device.site_id, Device.status)}
+    zabbix_unavailable = False
+    try:
+        hosts = read_inventory(db)["hosts"]
+    except HTTPException:
+        hosts = []
+        zabbix_unavailable = True
+    covered = {identifier for host in hosts for identifier in host["local_device_ids"]}
+    devices: list[dict[str, Any]] = [{"id": f"local-{item.id}", "name": item.name, "ip": item.ip, "site_id": item.site_id,
+                "status": item.status, "source": "zaddesh"} for item in local.values() if item.id not in covered]
+    for host in hosts:
+        interfaces = sorted(host["interfaces"], key=lambda interface: interface["main"] != "1")
+        address = next((item["ip"] if item["useip"] == "1" else item["dns"] for item in interfaces
+                        if (item["ip"] if item["useip"] == "1" else item["dns"])), "")
+        site_ids = {local[identifier].site_id for identifier in host["local_device_ids"] if identifier in local}
+        devices.append({"id": f"zabbix-{host['hostid']}", "name": host["name"] or host["host"], "ip": address,
+                        "site_id": next(iter(site_ids)) if len(site_ids) == 1 else None,
+                        "status": host["health_status"], "status_label": host["health_label"], "source": "zabbix"})
+    stats = {"total_devices": len(devices), "up": 0, "down": 0, "warning": 0, "unknown": 0, "unmanaged": 0}
+    for item in devices:
+        status = item["status"]
+        if status not in {"up", "down", "warning", "unknown", "unmanaged"}:
+            item["status"] = status = "unknown"
+        stats[status] += 1
+    return {"stats": stats, "devices": sorted(devices, key=lambda item: (item["name"].casefold(), item["id"])),
+            "zabbix_unavailable": zabbix_unavailable}
 
 
 @router.get("/validation")

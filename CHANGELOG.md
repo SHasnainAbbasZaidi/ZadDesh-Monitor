@@ -9,6 +9,7 @@
 - Allowed HTTP Zabbix connections and preferred Zabbix rows for matching IPs in the Devices list.
 - Added per-host import from Zabbix with supported ICMP and SNMP check settings.
 - Displayed active Zabbix agent availability and recent reporting in Devices, and surfaced Zabbix problems and events in Alerts & Events.
+- Aligned Overview incident counts and fleet health with Critical Errors and the combined device inventory.
 - Added the opt-in Network Diagram Beta with Admin-only SNMPv3 seed discovery and published read-only Overview widgets.
 - Network Diagram Beta now builds and refreshes an automatic map from saved SNMPv3 checks and preserves Admin edits.
 - See [the add-on guide](ADDON_USER_GUIDE.md) and [verification report](ADDON_FEATURES_REPORT.md).

@@ -7,7 +7,7 @@ import type { Device } from '../../types';
 
 const endpoint = '/zabbix';
 type Connection = { configured: boolean; api_url: string | null; version: string | null };
-type Host = { hostid: string; name: string; host: string; status: string; active_available?: string; agent_reporting_at?: string;
+type Host = { hostid: string; name: string; host: string; status: string; health_status: Device['status']; health_label: string;
   interfaces: { ip: string; dns: string; useip: string; available?: string }[] };
 export type ZabbixInventoryHost = Host & { local_device_ids: number[] };
 type Inventory = { hosts: ZabbixInventoryHost[]; limited: boolean };
@@ -18,15 +18,7 @@ type Validation = { status: 'match' | 'mismatch'; zabbix: Reading; zaddesh: Read
 const severities = ['Not classified', 'Info', 'Warning', 'Average', 'High', 'Critical'];
 
 export function zabbixAvailability(host: ZabbixInventoryHost) {
-  if (host.status !== '0') return { status: 'unknown', label: 'Disabled' };
-  const states = [host.active_available, ...host.interfaces.map(item => item.available)];
-  const up = states.includes('1');
-  const down = states.includes('2');
-  if (up && down) return { status: 'warning', label: 'Mixed' };
-  if (up) return { status: 'up', label: 'Available' };
-  if (down) return { status: 'down', label: 'Unavailable' };
-  if (host.agent_reporting_at) return { status: 'up', label: 'Agent reporting' };
-  return { status: 'unknown', label: 'No availability data' };
+  return { status: host.health_status, label: host.health_label };
 }
 
 type ImportResult = { status: 'added' | 'already_added'; checks_created: number; skipped: Record<string, number> };

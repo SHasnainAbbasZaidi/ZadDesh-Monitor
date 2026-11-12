@@ -192,7 +192,7 @@ def zabbix_incident_feed(
 ):
     connection = db.get(ZabbixConnection, 1)
     if connection is None:
-        return {"configured": False, "entries": [], "limited": False}
+        return {"configured": False, "entries": [], "limited": False, "total": 0, "scan_limited": False}
     now = utc_now()
     earliest = naive_utc(start) if start else now - timedelta(days=1)
     if kind == "problems":
@@ -200,7 +200,7 @@ def zabbix_incident_feed(
     latest = naive_utc(end) if end else now
     alert_types = {"availability": "device_offline", "link": "link_down", "rule": "other"}
     if earliest > latest or (type and type not in (alert_types if kind == "problems" else {"zabbix_problem", "zabbix_recovery"})):
-        return {"configured": True, "entries": [], "limited": False}
+        return {"configured": True, "entries": [], "limited": False, "total": 0, "scan_limited": False}
     params: dict[str, Any] = {"source": 0, "object": 0, "sortfield": "eventid", "sortorder": "DESC",
               "time_from": int(earliest.replace(tzinfo=timezone.utc).timestamp()),
               "time_till": int(latest.replace(tzinfo=timezone.utc).timestamp()), "limit": 500}
@@ -216,7 +216,7 @@ def zabbix_incident_feed(
             matching = local_matches(db, connection.api_url, inventory)
             host_ids = [key for key, ids in matching.items() if selected_ids.intersection(ids)]
             if not host_ids:
-                return {"configured": True, "entries": [], "limited": False}
+                return {"configured": True, "entries": [], "limited": False, "total": 0, "scan_limited": False}
             params["hostids"] = host_ids
         fields = ["eventid", "name", "severity", "clock", "acknowledged", "suppressed"]
         if kind == "problems":
@@ -272,7 +272,8 @@ def zabbix_incident_feed(
             entries.append({"id": event_id, "title": title, "device": names, "timestamp": time.replace(tzinfo=timezone.utc).isoformat(),
                             "status": state, "severity": level, "category": group})
     entries.sort(key=lambda row: (row["timestamp"], int(row["id"])), reverse=True)
-    return {"configured": True, "entries": entries[:100], "limited": len(entries) > 100 or len(records) >= 500}
+    return {"configured": True, "entries": entries[:100], "limited": len(entries) > 100 or len(records) >= 500,
+            "total": len(entries), "scan_limited": len(records) >= 500}
 
 
 @router.get("/alerts/{alert_id}")

@@ -52,13 +52,14 @@ test('add-on workspace and published diagram access', async ({ page, request }) 
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.route('**/api/v1/incidents/zabbix?*', route => {
     const events = new URL(route.request().url()).searchParams.get('kind') === 'events';
-    return route.fulfill({ json: { configured: events, limited: false, entries: events ? [{
+    return route.fulfill({ json: { configured: events, limited: false, scan_limited: false, total: events ? 1 : 0, entries: events ? [{
       id: '22', title: 'Zabbix agent recovered', device: 'Zabbix agent fixture', timestamp,
       severity: 'high', status: 'resolved', category: 'other',
     }] : [] } });
   });
   await page.goto('/');
   await signIn('addon-admin');
+  await expect(page.getByRole('button', { name: /Critical incidents/ })).toContainText('1');
   const socket = page.waitForEvent('websocket', { predicate: item => item.url().endsWith('/addon-updates') });
   await page.getByRole('button', { name: /Alerts & Events/ }).click();
   await socket;
