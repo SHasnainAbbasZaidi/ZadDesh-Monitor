@@ -4,6 +4,7 @@
 
 - Added the opt-in Alerts, Events and Logs workspace with correlated probe incidents, a timeline and webhook delivery.
 - Added a monitoring Errors view and improved expandable messages, log navigation, and load failure handling.
+- Made Critical Errors the default workspace view and added date-range removal, plus automatic removal from current views on resolution or after eight hours.
 - Added a read-only Zabbix connection with encrypted token storage, host and problem visibility, and ICMP reachability validation.
 - Allowed HTTP Zabbix connections and preferred Zabbix rows for matching IPs in the Devices list.
 - Added per-host import from Zabbix with supported ICMP and SNMP check settings.

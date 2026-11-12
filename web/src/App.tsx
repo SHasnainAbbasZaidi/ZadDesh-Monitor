@@ -22,20 +22,26 @@ export const AppContent: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [features, setFeatures] = useState({ incident_workspace: false, network_diagram_beta: false });
 
-  // Fetch active alerts count periodically for the sidebar badge
   useEffect(() => {
     if (!user) return;
-    const fetchBadge = () => {
-      api.getAlerts('active')
-        .then((alerts) => setActiveAlertsCount(alerts.length))
-        .catch(() => {});
-    };
-    fetchBadge();
     api.getSystemInfo().then(info => setDemoMode(info.environment === "demo")).catch(() => {});
     request<typeof features>('/features').then(setFeatures).catch(() => {});
-    const interval = setInterval(fetchBadge, 15000);
-    return () => clearInterval(interval);
   }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    const fetchBadge = () => {
+      const count = features.incident_workspace
+        ? request<{ total: number }>('/incidents/alerts?view=current&category=critical&limit=1&include_count=true')
+          .then(result => result.total)
+        : api.getAlerts('active').then(alerts => alerts.length);
+      void count.then(total => { if (active) setActiveAlertsCount(total); }).catch(() => {});
+    };
+    fetchBadge();
+    const interval = setInterval(fetchBadge, 15000);
+    return () => { active = false; clearInterval(interval); };
+  }, [user, features.incident_workspace]);
 
   if (isLoading) {
     return (

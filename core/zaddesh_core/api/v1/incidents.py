@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import AwareDatetime, BaseModel, Field
 from pymongo.errors import PyMongoError
-from sqlalchemy import case, func, or_
+from sqlalchemy import and_, case, func, or_, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from zaddesh_core.api.deps import get_current_user, require_role
@@ -16,7 +17,7 @@ from zaddesh_core.config import settings
 from zaddesh_core.database import get_db
 from zaddesh_core.incidents import queue_delivery, redact, timeline, utc_now
 from zaddesh_core.models.alerts import Acknowledgement, Alert, Event, MaintenanceWindow
-from zaddesh_core.models.auth import User
+from zaddesh_core.models.auth import AuditLog, User
 from zaddesh_core.models.checks import Check
 from zaddesh_core.models.incidents import Incident, IncidentDelivery, IncidentFilter, IncidentParent, IncidentTimeline
 from zaddesh_core.models.infrastructure import Collector, Device, Site
@@ -29,19 +30,47 @@ def enabled() -> None:
 
 
 router = APIRouter(prefix="/incidents", dependencies=[Depends(enabled)], tags=["Incident workspace"])
+ACTIVE_ALERT_WINDOW = timedelta(hours=8)
+CONNECTION_EVENT_TYPES = ("connect", "disconnect", "connected", "disconnected", "reconnect", "reconnected",
+                          "connection_opened", "connection_closed", "connection_lost", "connection_restored")
+
+
+def connection_noise(title):
+    return or_(func.lower(func.trim(title)).in_(CONNECTION_EVENT_TYPES),
+               title.ilike("connect %"), title.ilike("disconnect %"), title.ilike("connect:%"),
+               title.ilike("disconnect:%"), title.ilike("connection %"), title.ilike("connected%"),
+               title.ilike("disconnected%"), title.ilike("reconnected%"),
+               title.icontains(" disconnect", autoescape=True), title.icontains(" connected", autoescape=True))
+
+
+def alert_category():
+    link = or_(func.coalesce(Incident.correlation_key, "").startswith("link:"),
+               Alert.title.ilike("link down:%"), Alert.title.ilike("uplink down%"), Alert.title.ilike("downlink down%"))
+    offline = or_(Alert.title.ilike("device offline%"), Alert.title.ilike("device down%"),
+                  and_(Alert.rule_id.is_(None), Alert.title.startswith("Availability: "),
+                       Check.check_type == "icmp", Device.status == "down"))
+    return case((link, "link_down"), (offline, "device_offline"), else_="other")
+
+
+def alert_not_dismissed():
+    return or_(Alert.dismissed_episode_at.is_(None), Alert.dismissed_episode_at != Alert.triggered_at)
+
+
+def naive_utc(value: datetime) -> datetime:
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def iso(value: datetime | None) -> str | None:
     return value.replace(tzinfo=timezone.utc).isoformat() if value else None
 
 
-def alert_summary(alert, incident, device, check, site):
+def alert_summary(alert, incident, device, check, site, category):
     now = utc_now()
     reason = incident.suppression if incident else None
     if incident and incident.silenced_until and incident.silenced_until > now and alert.status != "resolved":
         reason = "silenced"
     return {
-        "id": alert.id, "title": redact(alert.title), "severity": alert.severity, "status": alert.status,
+        "id": alert.id, "title": redact(alert.title), "severity": alert.severity, "status": alert.status, "category": category,
         "suppression": reason if alert.status != "resolved" else None, "started_at": iso(alert.triggered_at),
         "resolved_at": iso(alert.resolved_at), "acknowledged_at": iso(incident.acknowledged_at if incident else None),
         "duration_seconds": max(0, int(((alert.resolved_at or now) - alert.triggered_at).total_seconds())),
@@ -54,7 +83,7 @@ def alert_summary(alert, incident, device, check, site):
 
 
 def joined_alerts(db: Session):
-    return (db.query(Alert, Incident, Device, Check, Site).join(Device, Alert.device_id == Device.id)
+    return (db.query(Alert, Incident, Device, Check, Site, alert_category()).join(Device, Alert.device_id == Device.id)
             .outerjoin(Incident, Incident.alert_id == Alert.id).outerjoin(Check, Check.id == Alert.check_id)
             .outerjoin(Site, Site.id == Device.site_id))
 
@@ -64,11 +93,27 @@ def list_incidents(
     q: str = Query("", max_length=120), severity: str | None = None, status: str | None = None,
     device_id: int | None = None, site_id: int | None = None,
     type: Literal["availability", "link", "rule"] | None = None,
+    category: Literal["critical", "device_offline", "link_down", "other"] | None = None,
+    view: Literal["all", "current", "history"] = "all", hide_connection_noise: bool = False,
+    include_count: bool = False,
     start: AwareDatetime | None = None, end: AwareDatetime | None = None,
     sort: Literal["newest", "oldest"] = "newest", offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
     _: User = Depends(get_current_user), db: Session = Depends(get_db),
 ):
     query = joined_alerts(db)
+    if view != "all":
+        cutoff = utc_now() - ACTIVE_ALERT_WINDOW
+        query = query.filter(alert_not_dismissed())
+        if view == "current":
+            query = query.filter(Alert.status != "resolved", Alert.triggered_at > cutoff)
+        else:
+            query = query.filter(or_(Alert.status == "resolved", Alert.triggered_at <= cutoff))
+    classification = alert_category()
+    if category:
+        query = query.filter(classification.in_(("device_offline", "link_down")) if category == "critical"
+                             else classification == category)
+    if hide_connection_noise:
+        query = query.filter(or_(classification != "other", ~connection_noise(Alert.title)))
     if q:
         query = query.filter(or_(Alert.title.icontains(q, autoescape=True), Device.name.icontains(q, autoescape=True),
                                  Check.name.icontains(q, autoescape=True)))
@@ -85,15 +130,17 @@ def list_incidents(
         if value is not None:
             query = query.filter(column == value)
     if start:
-        query = query.filter(Alert.triggered_at >= start.astimezone(timezone.utc).replace(tzinfo=None))
+        query = query.filter(Alert.triggered_at >= naive_utc(start))
     if end:
-        query = query.filter(Alert.triggered_at <= end.astimezone(timezone.utc).replace(tzinfo=None))
+        query = query.filter(Alert.triggered_at <= naive_utc(end))
+    total = query.count() if include_count else None
     order = Alert.triggered_at.asc() if sort == "oldest" else Alert.triggered_at.desc()
     rows = query.order_by(case((Alert.status == "resolved", 1), else_=0), order, Alert.id).offset(offset).limit(limit + 1).all()
     offline = [item.name for item in db.query(Collector).filter(or_(
         Collector.last_heartbeat_at.is_(None), Collector.last_heartbeat_at < utc_now() - timedelta(seconds=60),
     ))]
-    return {"alerts": [alert_summary(*row) for row in rows[:limit]], "has_more": len(rows) > limit, "offline_collectors": offline}
+    return {"alerts": [alert_summary(*row) for row in rows[:limit]], "has_more": len(rows) > limit,
+            "offline_collectors": offline, **({"total": total} if include_count else {})}
 
 
 def event_payload(event: Event):
@@ -105,12 +152,15 @@ def event_payload(event: Event):
 @router.get("/events")
 def list_incident_events(
     type: str | None = None, device_id: int | None = None, severity: str | None = None,
-    errors_only: bool = False,
+    errors_only: bool = False, hide_connection_noise: bool = False,
     start: AwareDatetime | None = None, end: AwareDatetime | None = None,
     offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
     _: User = Depends(get_current_user), db: Session = Depends(get_db),
 ):
     query = db.query(Event)
+    if hide_connection_noise:
+        routine = or_(func.lower(Event.event_type).in_(CONNECTION_EVENT_TYPES), connection_noise(Event.title))
+        query = query.filter(or_(Event.event_type.in_(("link_down", "device_offline", "uplink_down", "downlink_down")), ~routine))
     if errors_only:
         query = query.filter(Event.severity.in_(("emergency", "alert", "critical", "error", "high")))
     for column, value in ((Event.event_type, type), (Event.device_id, device_id), (Event.severity, severity)):
@@ -129,7 +179,7 @@ def incident_detail(alert_id: int, _: User = Depends(get_current_user), db: Sess
     row = joined_alerts(db).filter(Alert.id == alert_id).first()
     if row is None:
         raise HTTPException(404, "Alert not found")
-    alert, incident, device, check, site = row
+    alert, incident, device, check, site, category = row
     start = alert.triggered_at - timedelta(minutes=5)
     end = (alert.resolved_at or utc_now()) + timedelta(minutes=5)
     changes = db.query(IncidentTimeline).filter_by(alert_id=alert_id).order_by(
@@ -163,7 +213,7 @@ def incident_detail(alert_id: int, _: User = Depends(get_current_user), db: Sess
     ).order_by(MaintenanceWindow.start_time).limit(30)
     deliveries = db.query(IncidentDelivery).filter_by(alert_id=alert_id).order_by(IncidentDelivery.id.desc()).limit(30)
     return {
-        **alert_summary(*row), "message": redact(alert.message),
+        **alert_summary(alert, incident, device, check, site, category), "message": redact(alert.message),
         "timeline": [redact({"id": item.id, "timestamp": iso(item.timestamp), "kind": item.kind,
                              "actor": item.actor, "message": item.message}) for item in reversed(changes)],
         "events": [event_payload(event) for event in events], "logs": logs, "logs_available": logs_available,
@@ -179,6 +229,29 @@ class Action(BaseModel):
     action: Literal["acknowledge", "resolve", "comment", "silence"]
     comment: str = Field("", max_length=500)
     minutes: int = Field(15, ge=1, le=1440)
+
+
+class AlertPeriod(BaseModel):
+    start: AwareDatetime
+    end: AwareDatetime
+
+
+@router.post("/alerts/dismiss")
+def dismiss_alerts(payload: AlertPeriod, user: User = Depends(require_role(["admin"])), db: Session = Depends(get_db)):
+    start, end = naive_utc(payload.start), naive_utc(payload.end)
+    if end < start:
+        raise HTTPException(422, "End time must be on or after start time")
+    result = cast(CursorResult, db.execute(update(Alert).where(
+        Alert.triggered_at.between(start, end), alert_not_dismissed(),
+    ).values(dismissed_episode_at=Alert.triggered_at)))
+    removed = result.rowcount
+    if removed:
+        db.add(AuditLog(user_id=user.id, action="alerts.dismissed_by_period", entity_type="alert",
+                        details={"start": iso(start), "end": iso(end), "removed": removed}))
+    db.commit()
+    if removed:
+        notify_change()
+    return {"removed": removed}
 
 
 @router.post("/actions")

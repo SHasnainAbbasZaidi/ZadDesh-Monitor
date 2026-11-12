@@ -10,12 +10,15 @@ import { api, request, logSeverities, type InfrastructureLog } from '../services
 import { useAddonUpdates } from '../services/addonUpdates';
 import type { Device, Site } from '../types';
 
-type Tab = 'alerts' | 'events' | 'errors' | 'logs';
+type Tab = 'critical' | 'alerts' | 'history' | 'events' | 'errors' | 'logs';
+const views: [Tab, string][] = [['critical', 'Critical Errors'], ['alerts', 'alerts'], ['history', 'Alert history'],
+  ['events', 'events'], ['errors', 'errors'], ['logs', 'logs']];
 type Filters = Record<string, string>;
 type Row = {
   id: number; title: string; severity: string; status: string; suppression?: string;
   started_at: string; resolved_at?: string; duration_seconds: number; occurrences: number;
   flapping: boolean; device: string; device_id: number; check?: string; site?: string;
+  category: 'device_offline' | 'link_down' | 'other';
 };
 type Event = { id: number; device_id?: number; title: string; message?: string; timestamp: string; severity: string; type: string; details: object };
 type Detail = Row & {
@@ -51,11 +54,13 @@ function Raw({ value }: { value: object }) {
   </details>;
 }
 
-export function IncidentWorkspace({ initialTab = 'alerts' }: { initialTab?: Tab }) {
+export function IncidentWorkspace({ initialTab = 'critical' }: { initialTab?: Tab }) {
   const { user } = useAuth();
   const admin = user?.role === 'admin';
   const [tab, setTab] = useState<Tab>(initialTab);
   const eventView = tab === 'events' || tab === 'errors';
+  const alertView = tab === 'critical' || tab === 'alerts' || tab === 'history';
+  const currentAlerts = alertView && tab !== 'history';
   const [draft, setDraft] = useState<Filters>({});
   const [filters, setFilters] = useState<Filters>({});
   const [alerts, setAlerts] = useState<Row[]>([]);
@@ -80,6 +85,12 @@ export function IncidentWorkspace({ initialTab = 'alerts' }: { initialTab?: Tab 
   const [offset, setOffset] = useState(0);
   const [more, setMore] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [removeOpen, setRemoveOpen] = useState(false);
+  const [removeStart, setRemoveStart] = useState('');
+  const [removeEnd, setRemoveEnd] = useState('');
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState('');
+  const [notice, setNotice] = useState('');
   const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 767px)').matches);
   const time = (value: string) => new Date(value).toLocaleString(undefined, utc ? { timeZone: 'UTC', timeZoneName: 'short' } : {});
   useAddonUpdates(() => setRefresh(value => value + 1), paused);
@@ -102,13 +113,20 @@ export function IncidentWorkspace({ initialTab = 'alerts' }: { initialTab?: Tab 
     const query = queryString(filters);
     async function load() {
       try {
-        if (tab === 'alerts') {
+        if (alertView) {
+          const params = new URLSearchParams(query);
+          params.set('offset', String(offset));
+          params.set('view', tab === 'history' ? 'history' : 'current');
+          params.set('hide_connection_noise', 'true');
+          if (tab === 'critical') params.set('category', filters.category || 'critical');
           const result = await request<{ alerts: Row[]; has_more: boolean; offline_collectors: string[] }>(
-            `/incidents/alerts?offset=${offset}&${query}`, { signal: controller.signal });
+            `/incidents/alerts?${params}`, { signal: controller.signal });
+          if (controller.signal.aborted) return;
           setAlerts(result.alerts); setMore(result.has_more); setOffline(result.offline_collectors);
         } else if (eventView) {
           const result = await request<{ events: Event[]; has_more: boolean }>(
-            `/incidents/events?offset=${offset}&errors_only=${tab === 'errors'}&${query}`, { signal: controller.signal });
+            `/incidents/events?offset=${offset}&hide_connection_noise=true&errors_only=${tab === 'errors'}&${query}`, { signal: controller.signal });
+          if (controller.signal.aborted) return;
           setEvents(result.events); setMore(result.has_more);
         } else {
           setLogs(await request<InfrastructureLog[]>(`/logs?${query}`, { signal: controller.signal }));
@@ -122,7 +140,7 @@ export function IncidentWorkspace({ initialTab = 'alerts' }: { initialTab?: Tab 
     }
     void load();
     return () => controller.abort();
-  }, [eventView, filters, offset, refresh, tab]);
+  }, [alertView, eventView, filters, offset, refresh, tab]);
 
   useEffect(() => {
     if (expanded === undefined) return;
@@ -150,6 +168,26 @@ export function IncidentWorkspace({ initialTab = 'alerts' }: { initialTab?: Tab 
     } catch (failure) { setError((failure as Error).message); }
   }
 
+  async function removeAlerts() {
+    if (!removeStart || !removeEnd || new Date(removeEnd) < new Date(removeStart)) {
+      setRemoveError('Choose a start time and an end time in chronological order.');
+      return;
+    }
+    setRemoving(true); setRemoveError('');
+    try {
+      const result = await request<{ removed: number }>('/incidents/alerts/dismiss', {
+        method: 'POST', body: JSON.stringify({ start: new Date(removeStart).toISOString(), end: new Date(removeEnd).toISOString() }),
+      });
+      setRemoveOpen(false); setRemoveStart(''); setRemoveEnd('');
+      setSelected([]); setExpanded(undefined); setOffset(0); setRefresh(value => value + 1);
+      setNotice(`${result.removed} ${result.removed === 1 ? 'alert' : 'alerts'} removed from the workspace.`);
+    } catch (failure) {
+      setRemoveError((failure as Error).message);
+    } finally {
+      setRemoving(false);
+    }
+  }
+
   function saveLogs() {
     const link = document.createElement('a');
     link.href = URL.createObjectURL(new Blob([JSON.stringify(logs, null, 2)], { type: 'application/json' }));
@@ -161,34 +199,39 @@ export function IncidentWorkspace({ initialTab = 'alerts' }: { initialTab?: Tab 
   return <section className="space-y-4">
     <h1 className="ops-heading">Alerts, events and logs</h1>
     <div className="flex flex-wrap gap-2" aria-label="Incident views">
-      {(['alerts', 'events', 'errors', 'logs'] as const).map(view => <button className="ops-button capitalize" key={view} aria-pressed={tab === view} onClick={() => {
+      {views.map(([view, label]) => <button className="ops-button capitalize" key={view} aria-pressed={tab === view} onClick={() => {
         if (tab === view) return;
         setTab(view); setDraft({}); setFilters({}); setOffset(0); setExpanded(undefined); setSelected([]); setLoading(true); setLoadError(''); setError('');
-      }}>{view}</button>)}
+      }}>{label}</button>)}
       <button className="ops-button" aria-pressed={utc} onClick={() => setUtc(!utc)}>{utc ? 'UTC' : 'Local time'}</button>
       <button className="ops-button" onClick={() => setPaused(!paused)}>{paused ? 'Resume live updates' : 'Pause live updates'}</button>
       <button className="ops-button" onClick={() => setRefresh(value => value + 1)}>Refresh</button>
     </div>
     {error && <p role="alert" className="ops-notice">{error}</p>}
+    {notice && <p role="status" className="ops-notice">{notice}</p>}
     {loadError && <p role="alert" className="ops-notice">Could not load {tab}. {loadError}</p>}
     {tab === 'alerts' && offline.map(name => <p className="ops-notice" key={name}>Collector offline · {name}</p>)}
+    {currentAlerts && <p className="ops-muted text-sm">Alerts leave this view when they resolve or reach eight hours.</p>}
     <Card>
       <form className="flex flex-wrap items-end gap-3" onSubmit={event => {
         event.preventDefault(); setFilters(draft); setOffset(0); setSelected([]); setRefresh(value => value + 1);
       }}>
         {!eventView && field('q', 'Search')}
-        {field('severity', 'Severity', (tab === 'errors' ? ['emergency', 'alert', 'critical', 'error', 'high']
+        {tab !== 'critical' && field('severity', 'Severity', (tab === 'errors' ? ['emergency', 'alert', 'critical', 'error', 'high']
           : tab === 'logs' ? [...logSeverities] : [...logSeverities, 'high', 'average']).map(level => [level, level]))}
+        {tab === 'critical' && field('category', 'Category', [['device_offline', 'Device offline'], ['link_down', 'Uplink or downlink down']])}
         {tab === 'logs' ? field('source', 'Source') : field('device_id', 'Device', devices.map(device => [String(device.id), device.name]))}
         {eventView && field('type', 'Event type')}
-        {tab === 'alerts' && <>
-          {field('status', 'Status', [['active', 'Open'], ['acknowledged', 'Acknowledged'], ['resolved', 'Resolved'], ['suppressed', 'Suppressed']])}
+        {alertView && <>
+          {field('status', 'Status', [['active', 'Open'], ['acknowledged', 'Acknowledged'],
+            ...(tab === 'history' ? [['resolved', 'Resolved']] as [string, string][] : []), ['suppressed', 'Suppressed']])}
           {field('site_id', 'Site', sites.map(site => [String(site.id), site.name]))}
-          {field('type', 'Alert type', [['availability', 'Availability'], ['link', 'Link'], ['rule', 'Rule']])}
+          {tab !== 'critical' && field('type', 'Alert type', [['availability', 'Availability'], ['link', 'Link'], ['rule', 'Rule']])}
           {field('sort', 'Sort', [['newest', 'Newest first'], ['oldest', 'Oldest first']])}
         </>}
         {field('start', 'From', undefined, 'datetime-local')}{field('end', 'To', undefined, 'datetime-local')}
         <button className="ops-button" type="submit">Apply filters</button>
+        {alertView && admin && <button className="ops-button" type="button" onClick={() => { setRemoveError(''); setRemoveOpen(true); }}>Remove alerts by date</button>}
         {tab === 'logs' && <button type="button" className="ops-button" onClick={saveLogs} disabled={!logs.length}>Download JSON</button>}
       </form>
       {tab === 'alerts' && <div className="mt-3 flex flex-wrap gap-2">
@@ -207,22 +250,33 @@ export function IncidentWorkspace({ initialTab = 'alerts' }: { initialTab?: Tab 
         }}>×</button></span>)}
       </div>}
     </Card>
+    {removeOpen && <Modal isOpen title="Remove alerts by date" onClose={() => { if (!removing) setRemoveOpen(false); }}>
+      <form className="space-y-3" onSubmit={event => { event.preventDefault(); void removeAlerts(); }}>
+        <p className="text-sm">Removes alerts started in this period from the current and history views. Times are local.</p>
+        <div className="flex flex-wrap gap-3">
+          <label className="text-sm">Removal start<input className="dash-select block" type="datetime-local" required value={removeStart} onChange={event => setRemoveStart(event.target.value)} /></label>
+          <label className="text-sm">Removal end<input className="dash-select block" type="datetime-local" required value={removeEnd} onChange={event => setRemoveEnd(event.target.value)} /></label>
+        </div>
+        {removeError && <p role="alert" className="ops-notice">{removeError}</p>}
+        <button className="ops-button" disabled={removing} type="submit">{removing ? 'Removing…' : 'Remove alerts'}</button>
+      </form>
+    </Modal>}
     {loading && <p role="status">Loading {tab}…</p>}
-    {tab === 'alerts' && admin && !!selected.length && <div className="flex flex-wrap items-center gap-2">
+    {currentAlerts && admin && !!selected.length && <div className="flex flex-wrap items-center gap-2">
       <input className="dash-select" aria-label="Bulk comment" value={comment} maxLength={500} onChange={event => setComment(event.target.value)} />
       <label>Silence minutes <input className="dash-select w-24" type="number" min={1} max={1440} value={minutes} onChange={e => setMinutes(Number(e.target.value))} /></label>
       {['acknowledge', 'resolve', 'comment', 'silence'].map(kind => <button className="ops-button capitalize" key={kind} onClick={() => void action(kind, selected)}>{kind} selected</button>)}
     </div>}
-    {tab === 'alerts' && alerts.map(row => {
+    {alertView && !loading && alerts.map(row => {
       const Icon = row.severity === 'critical' ? CircleAlert : row.severity === 'info' ? Info : TriangleAlert;
       return <Card key={row.id}><div className="flex flex-wrap items-center gap-3 text-sm">
-        {admin && <input type="checkbox" aria-label={`Select ${row.title}`} checked={selected.includes(row.id)} onChange={event => {
+        {currentAlerts && admin && <input type="checkbox" aria-label={`Select ${row.title}`} checked={selected.includes(row.id)} onChange={event => {
           setSelected(event.target.checked ? [...selected, row.id] : selected.filter(id => id !== row.id));
         }} />}
         <Icon size={16} aria-hidden="true" /><Badge status={row.severity} />
         <button className="font-semibold underline" aria-expanded={expanded === row.id} onClick={() => {
           setDetail(undefined); setDetailError(''); setExpanded(expanded === row.id ? undefined : row.id);
-        }}>{incidentTitle(row.title)} · {row.device}{row.check ? ` · ${row.check}` : ''}</button>
+        }}>{row.category === 'device_offline' ? 'Device offline' : incidentTitle(row.title)} · {row.device}{row.check ? ` · ${row.check}` : ''}</button>
         <Badge status={row.status}>{row.suppression ? `Suppressed (${row.suppression})` : row.status === 'active' ? 'Open' : row.status}</Badge>
         {row.flapping && <Badge status="warning">Flapping</Badge>}
         <span>Started {time(row.started_at)}</span><span>{duration(row.duration_seconds)}</span><span>{row.occurrences} occurrences</span>
@@ -246,7 +300,7 @@ export function IncidentWorkspace({ initialTab = 'alerts' }: { initialTab?: Tab 
           {detail.notifications.length ? <ul>{detail.notifications.map(item => <li key={item.id}>
             {item.channel} · {item.event} · {item.status} · {time(item.timestamp)}{item.outcome && ` · ${item.outcome}`}
           </li>)}</ul> : <p className="ops-muted">No notifications recorded.</p>}
-          {admin && <div className="flex flex-wrap gap-2">
+          {currentAlerts && admin && <div className="flex flex-wrap gap-2">
             <input className="dash-select" aria-label="Incident comment" value={comment} maxLength={500} onChange={event => setComment(event.target.value)} />
             {['acknowledge', 'comment', 'resolve', 'silence'].map(kind => <button key={kind} className="ops-button capitalize" onClick={() => void action(kind, [row.id])}>{kind}{kind === 'silence' ? ` for ${minutes}m` : ''}</button>)}
           </div>}
@@ -267,8 +321,9 @@ export function IncidentWorkspace({ initialTab = 'alerts' }: { initialTab?: Tab 
       <EntryDetails title={logTitle(row.message)}><p className="text-sm">{row.message}</p><Raw value={row} /></EntryDetails>
       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs"><Badge status={row.severity} /> <span>{row.source} · {time(row.timestamp)}</span></div>
     </Card>)}
-    {!loading && !loadError && (tab === 'alerts' ? !alerts.length : eventView ? !events.length : !logs.length) && <p className="ops-empty">
-      {tab === 'logs' && !Object.values(filters).some(Boolean) ? 'No infrastructure logs have been received yet.' : `No ${tab} match these filters.`}
+    {!loading && !loadError && (alertView ? !alerts.length : eventView ? !events.length : !logs.length) && <p className="ops-empty">
+      {tab === 'critical' ? 'No current critical errors.' : tab === 'history' ? 'No alert history matches these filters.'
+        : tab === 'logs' && !Object.values(filters).some(Boolean) ? 'No infrastructure logs have been received yet.' : `No ${tab} match these filters.`}
     </p>}
     {tab !== 'logs' && <div className="flex gap-2">
       <button className="ops-button" disabled={!offset} onClick={() => setOffset(offset - 50)}>Previous</button>

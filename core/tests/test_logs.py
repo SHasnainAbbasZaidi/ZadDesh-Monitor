@@ -1,3 +1,4 @@
+from datetime import timedelta
 import os
 from secrets import token_hex
 from uuid import uuid4
@@ -28,6 +29,7 @@ def test_mongo_ingestion_deduplicates_and_filters(client, admin_headers, viewer_
     monkeypatch.setattr(settings.logs, "mongo_uri", uri)
     monkeypatch.setattr(settings.logs, "database", database)
     monkeypatch.setattr(settings.logs, "ingest_token", token)
+    monkeypatch.setattr(settings.logs, "retention_days", 30)
     headers = {"Authorization": f"Bearer {token}"}
     entry = {"event_id": str(uuid4()), "source": "lab", "severity": "warning", "message": "Test log"}
     endpoint = "http://127.0.0.1/api/v1/logs/ingest"
@@ -42,6 +44,8 @@ def test_mongo_ingestion_deduplicates_and_filters(client, admin_headers, viewer_
         assert client.get("/api/v1/logs?severity=info", headers=admin_headers).json() == []
         assert client.get("/api/v1/logs", headers=headers).status_code == 401
         assert log_collection().index_information()["expires_at_1"]["expireAfterSeconds"] == 0
+        stored = log_collection().find_one({"_id": entry["event_id"]})
+        assert stored is not None and stored["expires_at"] - stored["received_at"] == timedelta(days=30)
     finally:
         collection = log_collection()
         collection.database.client.close()

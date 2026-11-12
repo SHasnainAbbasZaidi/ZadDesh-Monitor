@@ -47,6 +47,7 @@ class Alert(Base):
     value: Mapped[float | None] = mapped_column(Float, nullable=True)
     triggered_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow, nullable=False, index=True)
     resolved_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    dismissed_episode_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
 
     acknowledgements = relationship("Acknowledgement", back_populates="alert", cascade="all, delete-orphan")
 

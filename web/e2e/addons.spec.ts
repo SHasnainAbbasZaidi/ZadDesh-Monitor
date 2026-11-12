@@ -19,11 +19,20 @@ test('add-on workspace and published diagram access', async ({ page, request }) 
   expect(deviceResponse.status()).toBe(201);
   const device = await deviceResponse.json();
   const [check] = await (await request.get(`/api/v1/checks?device_id=${device.id}`, { headers: admin })).json();
+  const offlineResponse = await request.post('/api/v1/devices', { headers: admin,
+    data: { name: 'Offline fixture', ip: '192.0.2.11', initial_check_types: ['icmp'] },
+  });
+  expect(offlineResponse.status()).toBe(201);
+  const offline = await offlineResponse.json();
+  const [ping] = await (await request.get(`/api/v1/checks?device_id=${offline.id}`, { headers: admin })).json();
   const timestamp = new Date(Date.now() - 2000).toISOString();
   const sample = await request.post('/api/v1/metrics/ingest', {
     headers: { Authorization: `Bearer ${process.env.ZADDESH_E2E_COLLECTOR}` },
-    data: { points: [['http.available', 0], ['http.response_time_ms', 28]].map(([metric_key, value]) =>
-      ({ device_id: device.id, check_id: check.id, metric_key, value, timestamp })) },
+    data: { points: [
+      { device_id: device.id, check_id: check.id, metric_key: 'http.available', value: 0, timestamp },
+      { device_id: device.id, check_id: check.id, metric_key: 'http.response_time_ms', value: 28, timestamp },
+      { device_id: offline.id, check_id: ping.id, metric_key: 'icmp.availability', value: 0, timestamp },
+    ] },
   });
   expect(sample.status()).toBe(202);
   const logToken = process.env.ZADDESH_E2E_LOG_TOKEN;
@@ -47,6 +56,10 @@ test('add-on workspace and published diagram access', async ({ page, request }) 
   await page.getByRole('button', { name: /Alerts & Events/ }).click();
   await socket;
   await expect(page.getByRole('heading', { name: 'Alerts, events and logs' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Critical Errors', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: /Device offline · Offline fixture/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Probe down · Add-on fixture/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'alerts', exact: true }).click();
   await page.getByRole('button', { name: /Probe down · Add-on fixture/ }).click();
   await expect(page.getByRole('heading', { name: 'Timeline' })).toBeVisible();
   await expect(page.locator('canvas').first()).toBeVisible();
@@ -62,10 +75,10 @@ test('add-on workspace and published diagram access', async ({ page, request }) 
     await expect(page.getByRole('dialog')).toHaveCount(0);
   }
   await page.getByRole('button', { name: 'errors', exact: true }).click();
-  await page.locator('summary').filter({ hasText: /^Probe down$/ }).click();
-  await expect(page.locator('.entry-detail-body > p').filter({ hasText: /Probe failed/ })).toBeVisible();
+  await page.locator('summary').filter({ hasText: /^Probe down$/ }).first().click();
+  await expect(page.locator('.entry-details[open] .entry-detail-body > p').filter({ hasText: /Probe failed/ })).toBeVisible();
   await page.getByRole('button', { name: 'events', exact: true }).click();
-  await expect(page.locator('summary').filter({ hasText: /^Probe down$/ })).toBeVisible();
+  await expect(page.locator('summary').filter({ hasText: /^Probe down$/ }).first()).toBeVisible();
   if (logToken) {
     await page.getByRole('button', { name: 'logs', exact: true }).click();
     await page.locator('summary').filter({ hasText: /^Link down$/ }).click();
@@ -75,6 +88,18 @@ test('add-on workspace and published diagram access', async ({ page, request }) 
     await expect(page.getByRole('button', { name: 'logs', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('summary').filter({ hasText: /^Link down$/ })).toBeVisible();
   }
+  await page.getByRole('button', { name: 'Alerts & Events', exact: false }).click();
+  await page.getByRole('button', { name: 'Critical Errors', exact: true }).click();
+  await page.getByRole('button', { name: 'Remove alerts by date' }).click();
+  const times = await page.evaluate(at => [-2, 2].map(minutes => {
+    const date = new Date(Date.parse(at) + minutes * 60_000);
+    return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+  }), timestamp);
+  await page.getByLabel('Removal start').fill(times[0]);
+  await page.getByLabel('Removal end').fill(times[1]);
+  await page.getByRole('dialog').getByRole('button', { name: 'Remove alerts', exact: true }).click();
+  await expect(page.getByText('2 alerts removed from the workspace.')).toBeVisible();
+  await expect(page.getByText('No current critical errors.')).toBeVisible();
   await page.getByRole('button', { name: 'Network Diagram Beta' }).click();
   await page.getByLabel('New diagram name').fill('Published lab diagram');
   await page.getByRole('button', { name: 'Create diagram', exact: true }).click();
@@ -126,7 +151,7 @@ test('add-on workspace and published diagram access', async ({ page, request }) 
   await expect(page.getByText('This diagram is unpublished or unavailable.')).toBeVisible();
   await page.getByRole('button', { name: /Alerts & Events/ }).click();
   await page.getByRole('button', { name: 'errors', exact: true }).click();
-  await expect(page.locator('summary').filter({ hasText: /^Probe down$/ })).toBeVisible();
+  await expect(page.locator('summary').filter({ hasText: /^Probe down$/ }).first()).toBeVisible();
   if (logToken) {
     await page.getByRole('button', { name: 'Infrastructure Logs' }).click();
     await expect(page.locator('summary').filter({ hasText: /^Link down$/ })).toBeVisible();
