@@ -1,27 +1,32 @@
 from __future__ import annotations
 
-import ipaddress
 import ssl
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any
+from hashlib import sha256
+from typing import Annotated, Any, cast
 
 import httpx
 from cryptography.exceptions import InvalidTag
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, SecretStr, StringConstraints
+from sqlalchemy import update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from zaddesh_core.api.deps import require_role
 from zaddesh_core.database import get_db
 from zaddesh_core.incidents import redact, utc_now
 from zaddesh_core.models.auth import AuditLog, User
-from zaddesh_core.models.checks import Check
-from zaddesh_core.models.infrastructure import Device
+from zaddesh_core.models.checks import Check, CheckState
+from zaddesh_core.models.infrastructure import Device, DeviceCredential
 from zaddesh_core.models.metrics import MetricRaw
-from zaddesh_core.models.zabbix import ZabbixConnection
+from zaddesh_core.models.zabbix import ZabbixConnection, ZabbixHostImport
 from zaddesh_core.security import allows_secret_transport, decrypt_secret, encrypt_secret
 from zaddesh_core.zabbix import ZabbixAPI, normalize_url
+from zaddesh_core.zabbix_import import (
+    canonical_ip, interface_target, prepare_checks, resolve_interface_credentials, target_name,
+)
 
 admin = require_role(["admin"])
 router = APIRouter(prefix="/zabbix", tags=["Zabbix"], dependencies=[Depends(admin)])
@@ -85,6 +90,34 @@ def visible_host(row: dict[str, Any], token: str) -> dict[str, Any]:
     }
 
 
+def source_key(url: str) -> str:
+    return sha256(url.encode()).hexdigest()
+
+
+def local_matches(db: Session, url: str, rows: list[dict[str, Any]]) -> dict[str, list[int]]:
+    local_by_target: dict[str, set[int]] = {}
+    for identifier, ip, hostname in db.query(Device.id, Device.ip, Device.hostname):
+        for value in (ip, hostname):
+            if target := target_name(value):
+                local_by_target.setdefault(target, set()).add(identifier)
+    linked = dict(db.query(ZabbixHostImport.host_id, ZabbixHostImport.device_id)
+                  .filter_by(source_key=source_key(url)).all())
+    result = {}
+    for row in rows:
+        host_id = str(row.get("hostid"))
+        local_ids = {linked[host_id]} if host_id in linked else set()
+        for interface in host_interfaces(row):
+            if target := interface_target(interface):
+                local_ids.update(local_by_target.get(target, ()))
+        result[host_id] = sorted(local_ids)
+    return result
+
+
+def inventory_hosts(db: Session, api: ZabbixAPI, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    matches = local_matches(db, str(api.url), rows)
+    return [{**visible_host(row, api.token), "local_device_ids": matches[str(row.get("hostid"))]} for row in rows]
+
+
 @router.get("/connection")
 def connection_status(db: Session = Depends(get_db)):
     return summary(db.get(ZabbixConnection, 1))
@@ -131,7 +164,75 @@ def read_hosts(q: str = Query("", max_length=120), db: Session = Depends(get_db)
         params.update(search={"host": term, "name": term}, searchByAny=True)
     with saved_api(db) as api:
         rows = api.rows("host.get", params)
-        return {"hosts": [visible_host(row, api.token) for row in rows[:100]], "limited": len(rows) > 100}
+        return {"hosts": inventory_hosts(db, api, rows[:100]), "limited": len(rows) > 100}
+
+
+@router.post("/hosts/{host_id}/import")
+def import_host(host_id: HostID, user: User = Depends(admin), db: Session = Depends(get_db)):
+    connection = db.get(ZabbixConnection, 1)
+    if connection is None:
+        raise HTTPException(409, "Connect Zabbix in Settings first")
+    url, saved_token = connection.api_url, connection.encrypted_token
+    with saved_api(db) as api:
+        rows = api.rows("host.get", {
+            **HOST_FIELDS, "hostids": [host_id], "limit": 1,
+            "selectInterfaces": [*HOST_FIELDS["selectInterfaces"], "type", "port", "details"],
+            "selectMacros": ["macro", "value", "type"],
+        })
+        if not rows or str(rows[0].get("hostid")) != host_id:
+            raise HTTPException(404, "The selected Zabbix host is unavailable")
+        host = rows[0]
+        existing = local_matches(db, url, rows)[host_id]
+        if existing:
+            return {"status": "already_added", "device_id": existing[0], "checks_created": 0, "skipped": {}}
+        interfaces = host_interfaces(host)
+        resolve_interface_credentials(interfaces, host.get("macros"))
+        usable = [item for item in interfaces if interface_target(item)]
+        primary_interface = min(usable, key=lambda item: (str(item.get("main")) != "1", str(item.get("type")) != "2"),
+                                default=None)
+        target = interface_target(primary_interface) if primary_interface else None
+        if not target or len(target) > 64:
+            raise HTTPException(422, "The Zabbix host needs a usable IP address or DNS interface")
+        hostname = target_name(primary_interface.get("dns")) if primary_interface else None
+        items = api.rows("item.get", {
+            "hostids": [host_id], "output": ["type", "key_", "name", "status", "interfaceid", "delay", "timeout", "snmp_oid"],
+            "sortfield": "itemid",
+        })
+        checks, snmp, skipped = prepare_checks(interfaces, items, target)
+        name = (visible(host.get("name"), api.token) or visible(host.get("host"), api.token) or f"Zabbix host {host_id}")[:128]
+        checks = [(visible(check_name, api.token)[:128] or spec.check_type.upper(), spec) for check_name, spec in checks]
+    locked = cast(CursorResult, db.execute(update(ZabbixConnection).where(
+        ZabbixConnection.id == 1, ZabbixConnection.api_url == url, ZabbixConnection.encrypted_token == saved_token,
+    ).values(id=ZabbixConnection.id))).rowcount
+    if not locked:
+        raise HTTPException(409, "The Zabbix connection changed during import. Try again.")
+    existing = local_matches(db, url, [host])[host_id]
+    if existing:
+        db.rollback()
+        return {"status": "already_added", "device_id": existing[0], "checks_created": 0, "skipped": {}}
+    device = Device(name=name, ip=target, hostname=hostname, is_monitored=str(host.get("status")) == "0", status="unknown")
+    db.add(device)
+    db.flush()
+    db.add(ZabbixHostImport(source_key=source_key(url), host_id=host_id, device_id=device.id))
+    credentials: dict[str, int] = {}
+    for check_name, spec in checks:
+        if spec.interface_id and spec.interface_id not in credentials:
+            credential = DeviceCredential(device_id=device.id, credential_type="snmp", encrypted_data=snmp[spec.interface_id][1])
+            db.add(credential)
+            db.flush()
+            credentials[spec.interface_id] = credential.id
+        params = dict(spec.params)
+        if spec.interface_id:
+            params["stored_credential_id"] = credentials[spec.interface_id]
+        check = Check(device_id=device.id, name=check_name, check_type=spec.check_type, target=spec.target,
+                      params=params, interval_seconds=spec.interval, timeout_seconds=spec.timeout,
+                      retries=0, is_enabled=spec.enabled)
+        check.state = CheckState(current_status="unknown", message="Imported, awaiting first poll")
+        db.add(check)
+    db.add(AuditLog(user_id=user.id, action="zabbix.host_imported", entity_type="device",
+                    entity_id=str(device.id), details={"zabbix_host_id": host_id, "checks": len(checks)}))
+    db.commit()
+    return {"status": "added", "device_id": device.id, "checks_created": len(checks), "skipped": dict(skipped)}
 
 
 @router.get("/problems")
@@ -142,32 +243,13 @@ def read_problems(db: Session = Depends(get_db)):
         return [{key: visible(row.get(key), api.token) for key in PROBLEM_FIELDS} for row in rows[:100]]
 
 
-def canonical_ip(value: Any) -> str | None:
-    try:
-        address = ipaddress.ip_address(value)
-        return str(getattr(address, "ipv4_mapped", None) or address)
-    except ValueError:
-        return None
-
-
 @router.get("/inventory")
 def read_inventory(db: Session = Depends(get_db)):
     if db.get(ZabbixConnection, 1) is None:
         return {"configured": False, "hosts": []}
-    local_by_ip: dict[str, set[int]] = {}
-    for identifier, ip in db.query(Device.id, Device.ip):
-        if address := canonical_ip(ip):
-            local_by_ip.setdefault(address, set()).add(identifier)
     with saved_api(db) as api:
         rows = api.rows("host.get", {**HOST_FIELDS, "sortfield": "host"})
-        hosts = []
-        for row in rows:
-            local_ids: set[int] = set()
-            for interface in host_interfaces(row):
-                if str(interface.get("useip")) == "1" and (address := canonical_ip(interface.get("ip"))):
-                    local_ids.update(local_by_ip.get(address, ()))
-            hosts.append({**visible_host(row, api.token), "local_device_ids": sorted(local_ids)})
-        return {"configured": True, "hosts": hosts}
+        return {"configured": True, "hosts": inventory_hosts(db, api, rows)}
 
 
 @router.get("/validation")

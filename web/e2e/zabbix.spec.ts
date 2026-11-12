@@ -37,7 +37,12 @@ test('Zabbix settings and read-only device view', async ({ page, request }) => {
       ] } });
     } else if (path === 'hosts') {
       await route.fulfill({ json: { hosts: [{ hostid: '7', host: 'external-switch', name: 'External switch', status: '0',
-        interfaces: [{ ip: '192.0.2.10', useip: '1' }] }], limited: false } });
+        local_device_ids: [local.id], interfaces: [{ ip: '192.0.2.10', useip: '1' }] }], limited: false } });
+    } else if (path === 'import') {
+      expect(route.request().method()).toBe('POST');
+      expect(new URL(route.request().url()).pathname).toBe('/api/v1/zabbix/hosts/8/import');
+      await route.fulfill({ json: { status: 'added', device_id: 42, checks_created: 1,
+        skipped: { 'SNMP credentials are hidden or use unresolved macros': 1 } } });
     } else if (path === 'problems') {
       await route.fulfill({ json: [{ eventid: '12', name: 'Link down on interface Gi0/1', severity: '4',
         clock: String(Math.floor(Date.now() / 1000)), acknowledged: '0' }] });
@@ -68,6 +73,11 @@ test('Zabbix settings and read-only device view', async ({ page, request }) => {
   await expect(page.getByRole('row').filter({ hasText: 'Local validation switch' })).toHaveCount(0);
   await expect(page.getByRole('row').filter({ hasText: 'Local-only switch' })).toBeVisible();
   await expect(page.getByRole('row').filter({ hasText: 'Zabbix-only switch' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'External switch added to ZadDesh' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Add Zabbix-only switch to ZadDesh' }).click();
+  await expect(page.getByRole('button', { name: 'Zabbix-only switch added to ZadDesh' })).toBeDisabled();
+  await expect(page.getByText('1 check imported.')).toBeVisible();
+  await expect(page.getByText(/1 skipped · SNMP credentials are hidden/)).toBeVisible();
   await page.getByRole('button', { name: 'Local telemetry for External switch' }).click();
   await expect(page.getByRole('dialog', { name: /Telemetry: Local validation switch/ })).toBeVisible();
   await page.keyboard.press('Escape');

@@ -9,12 +9,46 @@ const endpoint = '/zabbix';
 type Connection = { configured: boolean; api_url: string | null; version: string | null };
 type Host = { hostid: string; name: string; host: string; status: string; interfaces: { ip: string; dns: string; useip: string; available?: string }[] };
 export type ZabbixInventoryHost = Host & { local_device_ids: number[] };
-type Inventory = { hosts: Host[]; limited: boolean };
+type Inventory = { hosts: ZabbixInventoryHost[]; limited: boolean };
 type Problem = { eventid: string; name: string; severity: string; clock: string; acknowledged: string };
 type Reading = { up: boolean; timestamp: string };
 type Validation = { status: 'match' | 'mismatch'; zabbix: Reading; zaddesh: Reading; skew_seconds: number }
   | { status: 'unavailable'; message: string };
 const severities = ['Not classified', 'Info', 'Warning', 'Average', 'High', 'Critical'];
+
+type ImportResult = { status: 'added' | 'already_added'; checks_created: number; skipped: Record<string, number> };
+
+export function ZabbixAddHostButton({ host, onImported }: { host: ZabbixInventoryHost; onImported: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<ImportResult>();
+  const [error, setError] = useState('');
+  const added = Boolean(result || host.local_device_ids.length);
+
+  async function addHost() {
+    setBusy(true); setError('');
+    try {
+      setResult(await request<ImportResult>(`${endpoint}/hosts/${encodeURIComponent(host.hostid)}/import`, { method: 'POST' }));
+      onImported();
+    } catch (failure) {
+      setError((failure as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <div className="space-y-1">
+    <button className="ops-button" type="button" disabled={added || busy}
+      aria-label={added ? `${host.name || host.host} added to ZadDesh` : `Add ${host.name || host.host} to ZadDesh`}
+      onClick={() => void addHost()}>{added ? 'Added' : busy ? 'Adding…' : 'Add to ZadDesh'}</button>
+    {error && <p role="alert" className="whitespace-normal text-xs text-rose-600 dark:text-rose-400">{error}</p>}
+    {result && <div role="status" className="max-w-xs whitespace-normal text-xs ops-muted">
+      {result.status === 'already_added' ? <p>Already in ZadDesh.</p> : <>
+        <p>{result.checks_created} {result.checks_created === 1 ? 'check' : 'checks'} imported.</p>
+        {Object.entries(result.skipped).map(([reason, count]) => <p key={reason}>{count} skipped · {reason}</p>)}
+      </>}
+    </div>}
+  </div>;
+}
 
 export function ZabbixSettings() {
   const [connection, setConnection] = useState<Connection>();
@@ -74,7 +108,7 @@ export function ZabbixSettings() {
   </Card>;
 }
 
-export function ZabbixDevices({ devices }: { devices: Device[] }) {
+export function ZabbixDevices({ devices, onImported }: { devices: Device[]; onImported: () => void }) {
   const [connection, setConnection] = useState<Connection>();
   const [inventory, setInventory] = useState<Inventory>();
   const [problems, setProblems] = useState<Problem[]>();
@@ -150,6 +184,10 @@ export function ZabbixDevices({ devices }: { devices: Device[] }) {
         <strong>{item.name || item.host}</strong>
         <Badge status={item.status === '0' ? 'info' : 'unknown'}>{item.status === '0' ? 'Monitored' : 'Disabled'}</Badge>
         <span className="ops-muted break-all">{item.interfaces.map(value => value.useip === '1' ? value.ip : value.dns).filter(Boolean).join(', ')}</span>
+        <div className="ml-auto"><ZabbixAddHostButton host={item} onImported={() => {
+          setRefresh(value => value + 1);
+          onImported();
+        }} /></div>
       </li>)}</ul>
     </Card>
     <Card title="Zabbix problems" subtitle="Latest 100 unresolved problems visible to the connected account">

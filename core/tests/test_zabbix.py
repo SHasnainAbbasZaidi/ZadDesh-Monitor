@@ -16,6 +16,7 @@ from zaddesh_core import zabbix
 from zaddesh_core.api.v1 import zabbix as routes
 from zaddesh_core.config import settings
 from zaddesh_core.incidents import utc_now
+from zaddesh_core.models.infrastructure import DeviceCredential
 from zaddesh_core.models.metrics import MetricRaw
 from zaddesh_core.models.zabbix import ZabbixConnection
 from zaddesh_core.security import decrypt_secret
@@ -45,7 +46,12 @@ def test_read_only_connection_inventory_problems_and_validation(client, db_sessi
         assert request.headers.get("authorization") == (None if method == "apiinfo.version" else "Bearer " + token)
         if method == "item.get" and "filter" in data["params"]:
             assert data["params"]["filter"]["key_"] == ["icmpping"]
-        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": remote[method]})
+        if method == "item.get" and data["params"].get("hostids") == ["9"]:
+            assert "limit" not in data["params"]
+        result = remote[method]
+        if method == "host.get" and "hostids" in data["params"]:
+            result = [row for row in result if row["hostid"] in data["params"]["hostids"]]
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": result})
 
     @contextmanager
     def connect(url, key, version=""):
@@ -93,6 +99,54 @@ def test_read_only_connection_inventory_problems_and_validation(client, db_sessi
     assert client.get(target, headers=admin_headers).json()["status"] == "unavailable"
     remote["host.get"][0]["interfaces"][0]["ip"] = "192.0.2.11"
     assert client.get(target, headers=admin_headers).status_code == 422
+    imported_host = {
+        "hostid": "9", "name": "Imported switch", "host": "imported-switch", "status": "0",
+        "macros": [{"macro": "{$SNMP_USER}", "type": "0", "value": "zabbix-lab"}],
+        "interfaces": [
+            {"interfaceid": "19", "type": "2", "main": "1", "useip": "1", "ip": "192.0.2.30",
+             "dns": "switch.example.test", "port": "1161", "details": {
+                "version": "3", "securitylevel": "2", "authprotocol": "3", "privprotocol": "1", "contextname": "infra",
+                "securityname": "{$SNMP_USER}", "authpassphrase": "fixture-auth-secret", "privpassphrase": "fixture-priv-secret",
+             }},
+            {"interfaceid": "20", "type": "2", "useip": "1", "ip": "192.0.2.31", "port": "161",
+             "details": {"version": "2", "community": "{$HIDDEN}"}},
+        ],
+    }
+    remote["host.get"].append(imported_host)
+    remote["item.get"] = [
+        {"type": "20", "key_": "net.status", "name": "Interface state", "interfaceid": "19", "delay": "2m",
+         "timeout": "4s", "status": "0", "snmp_oid": "get[1.3.6.1.2.1.2.2.1.8.1]"},
+        {"type": "3", "key_": "icmpping", "name": "Ping", "interfaceid": "19", "delay": "1m", "timeout": "3s", "status": "1"},
+        {"type": "20", "key_": "sys", "interfaceid": "20", "delay": "60", "status": "0", "snmp_oid": "1.3.6.1.2.1.1.3.0"},
+        {"type": "0", "key_": "agent.ping"},
+    ]
+    import_route = root + "/hosts/9/import"
+    assert client.post(import_route, headers=viewer_headers).status_code == 403
+    import_response = client.post(import_route, headers=admin_headers)
+    assert import_response.status_code == 200 and "fixture-auth-secret" not in import_response.text
+    result = import_response.json()
+    assert result["status"] == "added" and result["checks_created"] == 2 and sum(result["skipped"].values()) == 2
+    device_id = result["device_id"]
+    imported = client.get(f"/api/v1/devices/{device_id}", headers=admin_headers).json()
+    assert (imported["name"], imported["ip"], imported["hostname"]) == ("Imported switch", "192.0.2.30", "switch.example.test")
+    imported_checks = client.get(f"/api/v1/checks?device_id={device_id}", headers=admin_headers).json()
+    checks_by_type = {item["check_type"]: item for item in imported_checks}
+    snmp_check = checks_by_type["snmp"]
+    assert (snmp_check["target"], snmp_check["interval_seconds"], snmp_check["timeout_seconds"]) == ("192.0.2.30", 120, 4)
+    assert snmp_check["params"] == {"version": "3", "operation": "get", "oid": "1.3.6.1.2.1.2.2.1.8.1",
+                                    "port": 1161, "security_level": "authPriv", "auth_protocol": "sha256",
+                                    "privacy_protocol": "aes128", "context_name": "infra"}
+    assert not checks_by_type["icmp"]["is_enabled"]
+    credential = db_session.query(DeviceCredential).filter_by(device_id=device_id).one()
+    assert "fixture-auth-secret" not in credential.encrypted_data
+    assert json.loads(decrypt_secret(credential.encrypted_data)) == {
+        "username": "zabbix-lab", "auth_password": "fixture-auth-secret", "priv_password": "fixture-priv-secret",
+    }
+    imported_host["interfaces"][0]["ip"] = "192.0.2.32"
+    repeated = client.post(import_route, headers=admin_headers).json()
+    assert repeated["status"] == "already_added" and repeated["device_id"] == device_id
+    hosts = client.get(root + "/hosts", headers=admin_headers)
+    assert "fixture-auth-secret" not in hosts.text and hosts.json()["hosts"][-1]["local_device_ids"] == [device_id]
     assert set(methods) == {"apiinfo.version", "host.get", "problem.get", "item.get"}
     assert client.delete(root + "/connection", headers=admin_headers).status_code == 204
     assert not client.get(root + "/connection", headers=admin_headers).json()["configured"]

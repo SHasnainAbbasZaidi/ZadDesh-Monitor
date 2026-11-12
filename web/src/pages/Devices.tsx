@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ZabbixDevices, type ZabbixInventoryHost } from '../components/ui/Zabbix';
+import { ZabbixAddHostButton, ZabbixDevices, type ZabbixInventoryHost } from '../components/ui/Zabbix';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
@@ -239,12 +239,17 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
     }),
   ]));
 
+  function refreshInventory() {
+    void loadDevices();
+    setZabbixRefresh(value => value + 1);
+  }
+
   if (isAdmin && showZabbix) return <section className="space-y-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <h1 className="ops-heading">Zabbix devices</h1>
       <button className="ops-button" onClick={() => setShowZabbix(false)}>Back to monitored devices</button>
     </div>
-    <ZabbixDevices devices={devices} />
+    <ZabbixDevices devices={devices} onImported={refreshInventory} />
   </section>;
 
   return (
@@ -263,7 +268,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
           {isAdmin && <button className="ops-button" onClick={() => setShowZabbix(true)}>Zabbix devices</button>}
           <button
             aria-label="Refresh devices"
-            onClick={() => { void loadDevices(); setZabbixRefresh(value => value + 1); }}
+            onClick={refreshInventory}
             className="p-2 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-500 hover:text-slate-900 dark:hover:text-white bg-white dark:bg-slate-900 shadow-sm"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -335,9 +340,12 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
                   <td className="px-5 py-3.5 text-xs ops-muted">—</td>
                   <td className="px-5 py-3.5 text-xs ops-muted">—</td>
                   <td className="px-5 py-3.5 text-xs ops-muted">—</td>
-                  <td className="px-5 py-3.5 text-right whitespace-nowrap">{local && <button
-                    className="ops-button" aria-label={`Local telemetry for ${label}`} onClick={() => openDeviceDetails(local)}
-                  >Local telemetry</button>}</td>
+                  <td className="px-5 py-3.5 text-right">
+                    <div className="flex flex-wrap items-start justify-end gap-2">
+                      {local && <button className="ops-button" aria-label={`Local telemetry for ${label}`} onClick={() => openDeviceDetails(local)}>Local telemetry</button>}
+                      <ZabbixAddHostButton host={host} onImported={refreshInventory} />
+                    </div>
+                  </td>
                 </tr>;
               })}
               {!zabbixLoading && filteredDevices.map((dev) => (

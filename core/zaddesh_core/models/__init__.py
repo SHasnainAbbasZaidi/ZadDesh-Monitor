@@ -27,7 +27,7 @@ from zaddesh_core.models.alerts import (
 from zaddesh_core.models.snmp import SnmpMib, SnmpTrap
 from zaddesh_core.models.incidents import Incident, IncidentTimeline, IncidentParent, IncidentFilter, IncidentDelivery
 from zaddesh_core.models.topology import TopologyDiagram, TopologyNode, TopologyLink, TopologyRun, TopologyChange
-from zaddesh_core.models.zabbix import ZabbixConnection
+from zaddesh_core.models.zabbix import ZabbixConnection, ZabbixHostImport
 from zaddesh_core.models.system import (
     Dashboard,
     Widget,
@@ -76,6 +76,7 @@ __all__ = [
     "TopologyRun",
     "TopologyChange",
     "ZabbixConnection",
+    "ZabbixHostImport",
     "Widget",
     "SavedView",
     "Report",
