@@ -105,11 +105,14 @@ def event_payload(event: Event):
 @router.get("/events")
 def list_incident_events(
     type: str | None = None, device_id: int | None = None, severity: str | None = None,
+    errors_only: bool = False,
     start: AwareDatetime | None = None, end: AwareDatetime | None = None,
     offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
     _: User = Depends(get_current_user), db: Session = Depends(get_db),
 ):
     query = db.query(Event)
+    if errors_only:
+        query = query.filter(Event.severity.in_(("emergency", "alert", "critical", "error", "high")))
     for column, value in ((Event.event_type, type), (Event.device_id, device_id), (Event.severity, severity)):
         if value is not None:
             query = query.filter(column == value)

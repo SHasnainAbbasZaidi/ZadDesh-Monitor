@@ -11,6 +11,7 @@ export function shortEntryTitle(text: string, fallback: string) {
 
 export function logTitle(message: string) {
   if (/\b(?:link|line protocol)\s+(?:(?:is|went|now)\s+)?down\b|\binterface\b.*\bchanged (?:state )?to down\b/i.test(message)) return 'Link down';
+  if (/\b(?:link|line protocol)\s+(?:(?:is|went|now)\s+)?up\b|\binterface\b.*\bchanged (?:state )?to up\b/i.test(message)) return 'Link up';
   if (/\bspeed\s+(?:has\s+)?changed\b|\bchanged\s+(?:the\s+)?(?:link\s+)?speed\b/i.test(message)) return 'Speed changed';
   if (/\bhigh memory usage\b|\bmemory usage\s+(?:is high|exceeded|above)\b/i.test(message)) return 'High memory usage';
   return shortEntryTitle(message, 'Log entry');
@@ -18,7 +19,8 @@ export function logTitle(message: string) {
 
 export function incidentTitle(title: string, message?: string, event = false) {
   if (/^Availability:\s/i.test(title)) return event && message === 'Probe passed' ? 'Probe recovered' : 'Probe down';
-  return shortEntryTitle(title, event ? 'Event' : 'Alert');
+  if (!title.trim()) return event ? 'Event' : 'Alert';
+  return logTitle(title);
 }
 
 export function EntryDetails({ title, children }: { title: string; children: ReactNode }) {

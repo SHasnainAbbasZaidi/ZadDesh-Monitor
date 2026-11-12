@@ -124,7 +124,8 @@ export const Checks: React.FC = () => {
                   </td>
                   <td className="px-5 py-3.5 text-xs text-slate-600 dark:text-slate-300">
                     {chk.state?.message ? <EntryDetails title={logTitle(chk.state.message)}>
-                      {chk.state.message}
+                      <p>{chk.state.message}</p>
+                      <p>{chk.check_type.toUpperCase()} · {chk.target}</p>
                     </EntryDetails> : 'Awaiting polling run'}
                   </td>
                 </tr>

@@ -84,7 +84,7 @@ export const AppContent: React.FC = () => {
       {tab === 'devices' && <Devices searchQuery={searchQuery} />}
       {tab === 'checks' && <Checks />}
       {tab === 'alerts' && (features.incident_workspace ? <IncidentWorkspace /> : <Alerts />)}
-      {tab === 'logs' && <Logs />}
+      {tab === 'logs' && (features.incident_workspace ? <IncidentWorkspace initialTab="logs" /> : <Logs />)}
       {tab === 'settings' && <Settings />}
     </AppLayout>
   );

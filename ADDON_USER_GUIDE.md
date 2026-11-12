@@ -17,7 +17,7 @@ Replace the example range with the specific management networks that the collect
 
 ## Alerts, Events and Logs
 
-Open **Alerts & Events** in the sidebar and select a tab. Each entry starts with a short title. Select a title to see the message and context. Alerts show severity, status, timing and occurrences. Open an alert to see its timeline, available metric samples, related events and logs, and webhook delivery status. Use **UTC** to view timestamps in UTC. Admins can acknowledge, resolve, silence and comment. The alert list also supports bulk actions and saved filters.
+Open **Alerts & Events** in the sidebar and select a tab. **Errors** shows high-severity monitoring events, and **Infrastructure Logs** opens the Logs tab directly. Each entry starts with a short title. Select a title to see the message and context. Alerts show severity, status, timing and occurrences. Open an alert to see its timeline, available metric samples, related events and logs, and webhook delivery status. Use **UTC** to view timestamps in UTC. Admins can acknowledge, resolve, silence and comment. The alert list also supports bulk actions and saved filters.
 
 A new failure after recovery reopens the same alert. The new episode gets its own start time and the timeline and occurrence count carry forward. Five state transitions within ten minutes mark the incident as flapping. A maintenance window or a configured down parent can suppress an incident. An offline collector is shown separately from an observed target failure.
 

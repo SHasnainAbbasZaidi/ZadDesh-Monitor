@@ -61,11 +61,19 @@ test('add-on workspace and published diagram access', async ({ page, request }) 
     await page.setViewportSize({ width: 1440, height: 960 });
     await expect(page.getByRole('dialog')).toHaveCount(0);
   }
+  await page.getByRole('button', { name: 'errors', exact: true }).click();
+  await page.locator('summary').filter({ hasText: /^Probe down$/ }).click();
+  await expect(page.locator('.entry-detail-body > p').filter({ hasText: /Probe failed/ })).toBeVisible();
+  await page.getByRole('button', { name: 'events', exact: true }).click();
+  await expect(page.locator('summary').filter({ hasText: /^Probe down$/ })).toBeVisible();
   if (logToken) {
     await page.getByRole('button', { name: 'logs', exact: true }).click();
     await page.locator('summary').filter({ hasText: /^Link down$/ }).click();
     await expect(page.getByText('Link down password=[redacted]', { exact: true })).toBeVisible();
     await expect(page.getByText('fixture-credential', { exact: false })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Infrastructure Logs' }).click();
+    await expect(page.getByRole('button', { name: 'logs', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('summary').filter({ hasText: /^Link down$/ })).toBeVisible();
   }
   await page.getByRole('button', { name: 'Network Diagram Beta' }).click();
   await page.getByLabel('New diagram name').fill('Published lab diagram');
@@ -116,4 +124,11 @@ test('add-on workspace and published diagram access', async ({ page, request }) 
   await expect(page.getByRole('img', { name: 'Network diagram with 2 nodes and 1 links' })).toBeVisible();
   expect((await request.patch(`/api/v1/network-diagram/${id}`, { headers: admin, data: { published: false } })).status()).toBe(200);
   await expect(page.getByText('This diagram is unpublished or unavailable.')).toBeVisible();
+  await page.getByRole('button', { name: /Alerts & Events/ }).click();
+  await page.getByRole('button', { name: 'errors', exact: true }).click();
+  await expect(page.locator('summary').filter({ hasText: /^Probe down$/ })).toBeVisible();
+  if (logToken) {
+    await page.getByRole('button', { name: 'Infrastructure Logs' }).click();
+    await expect(page.locator('summary').filter({ hasText: /^Link down$/ })).toBeVisible();
+  }
 });
