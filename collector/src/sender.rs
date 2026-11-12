@@ -22,8 +22,9 @@ mod tests {
     use super::*;
     use clap::Parser;
     use std::collections::HashMap;
+    use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
-    use tokio::time::timeout;
+    use tokio::time::{sleep_until, timeout, Instant};
 
     #[tokio::test]
     async fn slow_upload_does_not_stop_spooling() {
@@ -59,10 +60,11 @@ mod tests {
         let sender = tokio::spawn(MetricSender::new(config, queue, rx).run());
 
         // Keep the first request open while another poll completes.
-        let (_request, _) = timeout(Duration::from_secs(2), core.accept())
+        let (mut request, _) = timeout(Duration::from_secs(2), core.accept())
             .await
             .unwrap()
             .unwrap();
+        let response_at = Instant::now() + Duration::from_millis(5200);
         tx.send(point(2.0)).await.unwrap();
         let second = directory.join("00000000000000000001.json");
         let persisted = timeout(Duration::from_secs(2), async {
@@ -71,12 +73,25 @@ mod tests {
             }
         })
         .await;
+        let (paths, oldest) = DiskBuffer::peek(&directory, 1).unwrap();
+        // A valid commit response past the former five-second timeout still acknowledges the batch.
+        sleep_until(response_at).await;
+        request
+            .write_all(b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .unwrap();
+        let acknowledged = timeout(Duration::from_secs(2), async {
+            while paths[0].exists() {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
         sender.abort();
         let _ = sender.await;
-        let (_, oldest) = DiskBuffer::peek(&directory).unwrap().unwrap();
         fs::remove_dir_all(directory).unwrap();
         assert!(persisted.is_ok());
         assert_eq!(oldest[0].value, 1.0);
+        assert!(acknowledged.is_ok());
     }
 }
 
@@ -88,7 +103,10 @@ impl MetricSender {
     ) -> Self {
         Self {
             client: Client::builder()
-                .timeout(Duration::from_secs(5))
+                .connect_timeout(Duration::from_secs(5))
+                // The core may still be committing after the connection is established.
+                // Avoid retrying an in-flight SQLite write while the spool can keep growing.
+                .timeout(Duration::from_secs(30))
                 .build()
                 .unwrap_or_default(),
             config,
@@ -179,9 +197,9 @@ impl MetricSender {
     async fn deliver(client: &Client, config: &CollectorConfig, directory: &Path) {
         let url = format!("{}/api/v1/metrics/ingest", config.server_url);
         for _ in 0..16 {
-            let (path, points) = match DiskBuffer::peek(directory) {
-                Ok(Some(batch)) => batch,
-                Ok(None) => return,
+            let (paths, points) = match DiskBuffer::peek(directory, config.batch_size) {
+                Ok(batch) if !batch.0.is_empty() => batch,
+                Ok(_) => return,
                 Err(error) => {
                     error!("Cannot read telemetry spool: {error}");
                     return;
@@ -199,9 +217,11 @@ impl MetricSender {
                 .await
             {
                 Ok(response) if response.status().is_success() => {
-                    if let Err(error) = fs::remove_file(path) {
-                        error!("Could not acknowledge spooled batch: {error}");
-                        return;
+                    for path in paths {
+                        if let Err(error) = fs::remove_file(path) {
+                            error!("Could not acknowledge spooled batch: {error}");
+                            return;
+                        }
                     }
                 }
                 Ok(response) => {
@@ -213,7 +233,8 @@ impl MetricSender {
                 }
                 Err(error) => {
                     warn!(
-                        "Core unavailable; preserving telemetry spool: {}",
+                        "Telemetry upload failed; preserving spool (timeout: {}): {}",
+                        error.is_timeout(),
                         error.without_url()
                     );
                     return;
