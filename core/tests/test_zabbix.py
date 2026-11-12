@@ -41,7 +41,7 @@ def test_read_only_connection_inventory_problems_and_validation(client, db_sessi
         method = data["method"]
         methods.append(method)
         assert request.url.path == "/zabbix/api_jsonrpc.php"
-        assert request.extensions["sni_hostname"] == "192.0.2.19"
+        assert request.url.scheme == "http" and "sni_hostname" not in request.extensions
         assert request.headers.get("authorization") == (None if method == "apiinfo.version" else "Bearer " + token)
         if method == "item.get" and "filter" in data["params"]:
             assert data["params"]["filter"]["key_"] == ["icmpping"]
@@ -56,13 +56,13 @@ def test_read_only_connection_inventory_problems_and_validation(client, db_sessi
     root = "http://127.0.0.1/api/v1/zabbix"
     assert client.get(root + "/connection", headers=viewer_headers).status_code == 403
     assert client.put(root + "/connection", headers=viewer_headers, json={
-        "api_url": "https://192.0.2.19/zabbix", "token": token,
+        "api_url": "http://192.0.2.19/zabbix", "token": token,
     }).status_code == 403
     response = client.put(root + "/connection", headers=admin_headers, json={
-        "api_url": "https://192.0.2.19/zabbix", "token": token,
+        "api_url": "http://192.0.2.19/zabbix", "token": token,
     })
     assert response.status_code == 200 and token not in response.text
-    assert response.json() == {"configured": True, "api_url": "https://192.0.2.19/zabbix/api_jsonrpc.php", "version": "7.4.1"}
+    assert response.json() == {"configured": True, "api_url": "http://192.0.2.19/zabbix/api_jsonrpc.php", "version": "7.4.1"}
     saved = db_session.get(ZabbixConnection, 1)
     assert saved.encrypted_token != token and decrypt_secret(saved.encrypted_token) == token
     assert client.get(root + "/hosts", headers=admin_headers).json()["hosts"][0]["name"] == "Validation host"
@@ -74,6 +74,11 @@ def test_read_only_connection_inventory_problems_and_validation(client, db_sessi
     device = client.post("/api/v1/devices", headers=admin_headers, json={
         "name": "Validation host", "ip": "192.0.2.10", "initial_check_types": ["icmp"],
     }).json()
+    preferred = client.get(root + "/inventory", headers=admin_headers).json()
+    assert preferred["hosts"][0]["local_device_ids"] == [device["id"]]
+    assert preferred["hosts"][1]["local_device_ids"] == []
+    assert client.get(f"/api/v1/devices/{device['id']}", headers=admin_headers).status_code == 200
+    assert client.get(root + "/inventory", headers=viewer_headers).status_code == 403
     check = client.get(f"/api/v1/checks?device_id={device['id']}", headers=admin_headers).json()[0]
     target = f"{root}/validation?device_id={device['id']}&host_id=7"
     assert client.get(target, headers=admin_headers).json()["status"] == "unavailable"
@@ -95,7 +100,7 @@ def test_read_only_connection_inventory_problems_and_validation(client, db_sessi
 
 def test_connection_blocks_local_metadata_and_insecure_transport(client, admin_headers, monkeypatch):
     monkeypatch.setattr(settings.security, "encryption_key", token_hex(32))
-    for url in ("https://169.254.169.254", "https://127.0.0.1", "http://192.0.2.19"):
+    for url in ("http://169.254.169.254", "https://127.0.0.1", "ftp://192.0.2.19"):
         response = client.put("http://127.0.0.1/api/v1/zabbix/connection", headers=admin_headers,
                               json={"api_url": url, "token": token_hex(32)})
         assert response.status_code == 422
@@ -140,6 +145,33 @@ def test_pinned_https_connection_verifies_original_zabbix_hostname(tmp_path, mon
             with httpx.Client(verify=ssl.create_default_context(cafile=str(cert_path)), trust_env=False) as transport:
                 api = ZabbixAPI(transport, normalize_url(f"https://{hostname}:{server.server_port}"), "")
                 assert api.detect_version() == "7.4.1"
+        finally:
+            server.shutdown()
+            thread.join(timeout=3)
+
+
+def test_http_connection_reads_hosts_with_bearer_token(monkeypatch):
+    token = token_hex(32)
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            data = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            assert self.headers["Host"] == f"zabbix.example.test:{self.server.server_port}"
+            assert self.headers["Authorization"] == f"Bearer {token}"
+            assert data["method"] == "host.get"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"jsonrpc":"2.0","id":1,"result":[{"hostid":"7"}]}')
+
+    with HTTPServer(("127.0.0.1", 0), Handler) as server:
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            monkeypatch.setattr(zabbix, "pinned_target", lambda url: url.copy_with(host="127.0.0.1"))
+            with httpx.Client(trust_env=False, timeout=2) as transport:
+                api = ZabbixAPI(transport, normalize_url(f"http://zabbix.example.test:{server.server_port}"), token, "7.4.1")
+                assert api.rows("host.get", {"output": ["hostid"]}) == [{"hostid": "7"}]
         finally:
             server.shutdown()
             thread.join(timeout=3)

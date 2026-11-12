@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { ZabbixDevices } from '../components/ui/Zabbix';
+import { ZabbixDevices, type ZabbixInventoryHost } from '../components/ui/Zabbix';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { MetricChart } from '../components/ui/MetricChart';
 import { DefaultSnmpFields, readSnmpInterface, SnmpFields } from '../components/ui/SnmpCheckForm';
 import { useAuth } from '../context/AuthContext';
-import { api } from '../services/api';
+import { api, request } from '../services/api';
 import { Device, Site, Group, Check } from '../types';
 import {
   Plus,
@@ -32,6 +32,15 @@ interface MetricSeriesData {
   value: number;
 }
 
+function zabbixHealth(host: ZabbixInventoryHost) {
+  if (host.status !== '0') return 'unknown';
+  const available = host.interfaces.some(item => item.available === '1');
+  const unavailable = host.interfaces.some(item => item.available === '2');
+  if (available && unavailable) return 'warning';
+  if (available) return 'up';
+  return unavailable ? 'down' : 'unknown';
+}
+
 export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
@@ -43,6 +52,10 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
   const [range, setRange] = useState(120);
   const [devices, setDevices] = useState<Device[]>([]);
   const [showZabbix, setShowZabbix] = useState(false);
+  const [zabbixHosts, setZabbixHosts] = useState<ZabbixInventoryHost[]>([]);
+  const [zabbixLoading, setZabbixLoading] = useState(isAdmin);
+  const [zabbixError, setZabbixError] = useState('');
+  const [zabbixRefresh, setZabbixRefresh] = useState(0);
   const [sites, setSites] = useState<Site[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -95,6 +108,24 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
   useEffect(() => {
     loadDevices();
   }, []);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const controller = new AbortController();
+    async function loadInventory() {
+      try {
+        const result = await request<{ hosts: ZabbixInventoryHost[] }>('/zabbix/inventory', { signal: controller.signal });
+        if (!controller.signal.aborted) { setZabbixHosts(result.hosts); setZabbixError(''); }
+      } catch (failure) {
+        if (!controller.signal.aborted) setZabbixError((failure as Error).message);
+      } finally {
+        if (!controller.signal.aborted) setZabbixLoading(false);
+      }
+    }
+    void loadInventory();
+    const timer = window.setInterval(loadInventory, 60_000);
+    return () => { controller.abort(); window.clearInterval(timer); };
+  }, [isAdmin, zabbixRefresh]);
 
   const selectedId = selectedDevice?.id;
   useEffect(() => {
@@ -170,6 +201,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
       setSnmpMode('default');
       setShowDeviceDetails(false);
       loadDevices();
+      setZabbixRefresh(value => value + 1);
     } catch (err: any) {
       setFormError(err.message || 'Failed to create device');
     } finally {
@@ -184,22 +216,28 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
       await api.deleteDevice(id);
       if (selectedDevice?.id === id) setSelectedDevice(null);
       loadDevices();
+      setZabbixRefresh(value => value + 1);
     } catch (err) {
       console.error('Failed to delete device:', err);
     }
   };
 
-  const filteredDevices = devices.filter((d) => {
-    const matchesSearch =
-      !searchQuery ||
-      d.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      d.ip.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (d.hostname && d.hostname.toLowerCase().includes(searchQuery.toLowerCase()));
-
-    const matchesStatus = filterStatus === 'all' || d.status.toLowerCase() === filterStatus.toLowerCase();
-
-    return matchesSearch && matchesStatus;
-  });
+  const devicesById = new Map(devices.map(device => [device.id, device]));
+  const zabbixLocalIds = new Set(zabbixHosts.flatMap(host => host.local_device_ids));
+  const localDevices = devices.filter(device => !zabbixLocalIds.has(device.id));
+  const search = searchQuery.trim().toLowerCase();
+  const matchesSearch = (fields: (string | undefined | null)[]) =>
+    !search || fields.some(field => field?.toLowerCase().includes(search));
+  const matchesStatus = (status: string) => filterStatus === 'all' || status.toLowerCase() === filterStatus;
+  const filteredDevices = localDevices.filter(device =>
+    matchesStatus(device.status) && matchesSearch([device.name, device.ip, device.hostname]));
+  const filteredZabbix = zabbixHosts.filter(host => matchesStatus(zabbixHealth(host)) && matchesSearch([
+    host.name, host.host, ...host.interfaces.flatMap(item => [item.ip, item.dns]),
+    ...host.local_device_ids.flatMap(id => {
+      const device = devicesById.get(id);
+      return device ? [device.name, device.hostname] : [];
+    }),
+  ]));
 
   if (isAdmin && showZabbix) return <section className="space-y-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -218,14 +256,14 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
             Monitored Devices
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Network switches, physical servers, VMs, and application targets (Click any row to view live telemetry graphs)
+            ZadDesh devices and hosts visible through the connected Zabbix account.
           </p>
         </div>
         <div className="flex items-center space-x-3">
           {isAdmin && <button className="ops-button" onClick={() => setShowZabbix(true)}>Zabbix devices</button>}
           <button
             aria-label="Refresh devices"
-            onClick={loadDevices}
+            onClick={() => { void loadDevices(); setZabbixRefresh(value => value + 1); }}
             className="p-2 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-500 hover:text-slate-900 dark:hover:text-white bg-white dark:bg-slate-900 shadow-sm"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -252,13 +290,16 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
                 : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
             }`}
           >
-            {st} ({st === 'all' ? devices.length : devices.filter((d) => d.status === st).length})
+            {st} ({st === 'all' ? localDevices.length + zabbixHosts.length
+              : localDevices.filter(device => device.status === st).length + zabbixHosts.filter(host => zabbixHealth(host) === st).length})
           </button>
         ))}
       </div>
 
       {loadError && <p role="alert" className="ops-notice">{loadError}</p>}
-      {!loading && !loadError && !filteredDevices.length && <p className="ops-empty">No devices match this view.</p>}
+      {zabbixError && <p role="alert" className="ops-notice">Could not refresh Zabbix inventory. {zabbixError}</p>}
+      {zabbixLoading && <p role="status" className="ops-muted text-sm">Checking Zabbix inventory…</p>}
+      {!loading && !zabbixLoading && !loadError && !filteredDevices.length && !filteredZabbix.length && <p className="ops-empty">No devices match this view.</p>}
       {/* Devices Table Card */}
       <Card>
         <div className="overflow-x-auto -mx-5 -my-5">
@@ -275,7 +316,31 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800/80">
-              {filteredDevices.map((dev) => (
+              {filteredZabbix.map(host => {
+                const label = host.name || host.host;
+                const health = zabbixHealth(host);
+                const addresses = [...new Set(host.interfaces.map(item => item.useip === '1' ? item.ip : item.dns).filter(Boolean))];
+                const local = host.local_device_ids.length === 1 ? devicesById.get(host.local_device_ids[0]) : undefined;
+                return <tr key={`zabbix-${host.hostid}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                  <td className="px-5 py-3.5 whitespace-nowrap"><Badge status={health}>
+                    {host.status !== '0' ? 'Disabled' : health === 'up' ? 'Available' : health === 'down' ? 'Unavailable' : health === 'warning' ? 'Mixed' : 'Unknown'}
+                  </Badge></td>
+                  <td className="px-5 py-3.5 font-medium">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Server className="h-4 w-4 text-sky-500" aria-hidden="true" />
+                      <span>{label}</span><Badge status="info">Zabbix</Badge>
+                    </div>
+                  </td>
+                  <td className="px-5 py-3.5 font-mono text-xs ops-muted">{addresses.join(', ') || '—'}</td>
+                  <td className="px-5 py-3.5 text-xs ops-muted">—</td>
+                  <td className="px-5 py-3.5 text-xs ops-muted">—</td>
+                  <td className="px-5 py-3.5 text-xs ops-muted">—</td>
+                  <td className="px-5 py-3.5 text-right whitespace-nowrap">{local && <button
+                    className="ops-button" aria-label={`Local telemetry for ${label}`} onClick={() => openDeviceDetails(local)}
+                  >Local telemetry</button>}</td>
+                </tr>;
+              })}
+              {!zabbixLoading && filteredDevices.map((dev) => (
                 <tr
                   key={dev.id}
                   className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors"

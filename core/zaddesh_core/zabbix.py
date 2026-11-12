@@ -16,9 +16,9 @@ def normalize_url(value: str) -> httpx.URL:
     try:
         url = httpx.URL(value.strip())
     except (httpx.InvalidURL, ValueError):
-        raise HTTPException(422, "Enter a valid Zabbix HTTPS URL") from None
-    if url.scheme != "https" or not url.host or url.userinfo or url.query or url.fragment:
-        raise HTTPException(422, "Use a Zabbix HTTPS URL without credentials, query parameters, or a fragment")
+        raise HTTPException(422, "Enter a valid Zabbix HTTP or HTTPS URL") from None
+    if url.scheme not in {"http", "https"} or not url.host or url.userinfo or url.query or url.fragment:
+        raise HTTPException(422, "Use an HTTP or HTTPS URL without credentials, query parameters, or a fragment")
     path = url.path.rstrip("/")
     if not path.endswith("/api_jsonrpc.php"):
         path += "/api_jsonrpc.php"
@@ -28,7 +28,7 @@ def normalize_url(value: str) -> httpx.URL:
 def pinned_target(url: httpx.URL) -> httpx.URL:
     try:
         addresses = {ipaddress.ip_address(item[4][0]) for item in socket.getaddrinfo(
-            url.raw_host.decode("ascii"), url.port or 443, type=socket.SOCK_STREAM,
+            url.raw_host.decode("ascii"), url.port or (443 if url.scheme == "https" else 80), type=socket.SOCK_STREAM,
         )}
     except (OSError, ValueError):
         raise HTTPException(502, "The Zabbix hostname could not be resolved") from None
@@ -61,8 +61,8 @@ class ZabbixAPI:
             else:
                 payload["auth"] = self.token
         try:
-            with self.client.stream("POST", self.target, json=payload, headers=headers,
-                                    extensions={"sni_hostname": self.url.raw_host.decode("ascii")}) as response:
+            extensions = {"sni_hostname": self.url.raw_host.decode("ascii")} if self.url.scheme == "https" else {}
+            with self.client.stream("POST", self.target, json=payload, headers=headers, extensions=extensions) as response:
                 if response.status_code in (401, 403):
                     raise HTTPException(502, "Zabbix rejected the connection credentials")
                 if not response.is_success:
@@ -76,7 +76,8 @@ class ZabbixAPI:
         except httpx.TimeoutException:
             raise HTTPException(504, "The Zabbix API request timed out") from None
         except httpx.HTTPError:
-            raise HTTPException(502, "Could not establish a verified HTTPS connection to Zabbix") from None
+            message = "Could not establish a verified HTTPS connection to Zabbix" if self.url.scheme == "https" else "Could not connect to Zabbix over HTTP"
+            raise HTTPException(502, message) from None
         except (UnicodeError, ValueError):
             raise HTTPException(502, "Zabbix did not return a valid JSON-RPC response") from None
         if not isinstance(result, dict) or result.get("jsonrpc") != "2.0" or result.get("id") != 1:

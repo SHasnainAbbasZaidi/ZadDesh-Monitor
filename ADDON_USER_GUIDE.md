@@ -38,9 +38,9 @@ For a separate discovery process, run the collector with `--topology-only` and a
 
 ## Connect Zabbix
 
-1. As an Admin, go to **Settings → Zabbix connection**. Enter the Zabbix frontend HTTPS URL and paste an API token for an account with read access to the required host groups. Allow `host.get`, `problem.get`, and `item.get` in the Zabbix role. The core must trust the Zabbix server’s TLS certificate.
+1. As an Admin, go to **Settings → Zabbix connection**. Enter the Zabbix frontend HTTP or HTTPS URL and paste an API token for an account with read access to the required host groups. Allow `host.get`, `problem.get`, and `item.get` in the Zabbix role. HTTP sends the token unencrypted. With HTTPS, the core verifies the server’s certificate.
 2. Choose **Test and save**. ZadDesh checks the API version and verifies host, item and problem reads before saving the encrypted token.
-3. Open **Devices → Zabbix devices** to see the external host inventory and unresolved Zabbix problems. New hosts visible to the token appear on refresh. The external list refreshes every minute while open.
+3. Open **Devices** to see the combined inventory. If a Zabbix host uses the same IP as a ZadDesh device, the list shows the Zabbix host and links to its local telemetry when there is one matching local record. Local checks and history are preserved. Use **Devices → Zabbix devices** to see the dedicated Zabbix inventory and unresolved problems. Hosts visible to the token appear on refresh.
 4. Under **Validate ICMP reachability**, select a ZadDesh device and a Zabbix host with the same IP. The Zabbix host needs an enabled `icmpping` item. The comparison reports each source’s latest comparable status and sample time. A match requires equal reachability readings within two minutes of each other.
 
-ZadDesh reads the external inventory and problems through the Zabbix API. Those hosts are displayed in the Zabbix view. Add a ZadDesh device and ICMP check when you need an independent comparison.
+Add a ZadDesh device and ICMP check when you need an independent comparison.

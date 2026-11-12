@@ -27,7 +27,7 @@ admin = require_role(["admin"])
 router = APIRouter(prefix="/zabbix", tags=["Zabbix"], dependencies=[Depends(admin)])
 HostID = Annotated[str, StringConstraints(pattern=r"^\d{1,20}$")]
 HOST_FIELDS = {"output": ["hostid", "host", "name", "status"],
-               "selectInterfaces": ["interfaceid", "ip", "dns", "useip", "main"]}
+               "selectInterfaces": ["interfaceid", "ip", "dns", "useip", "main", "available"]}
 PROBLEM_FIELDS = ["eventid", "name", "severity", "clock", "acknowledged"]
 
 
@@ -77,6 +77,14 @@ def host_interfaces(row: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in values if isinstance(item, dict)] if isinstance(values, list) else []
 
 
+def visible_host(row: dict[str, Any], token: str) -> dict[str, Any]:
+    return {
+        **{key: visible(row.get(key), token) for key in HOST_FIELDS["output"]},
+        "interfaces": [{key: visible(item.get(key), token) for key in HOST_FIELDS["selectInterfaces"]}
+                       for item in host_interfaces(row)],
+    }
+
+
 @router.get("/connection")
 def connection_status(db: Session = Depends(get_db)):
     return summary(db.get(ZabbixConnection, 1))
@@ -123,12 +131,7 @@ def read_hosts(q: str = Query("", max_length=120), db: Session = Depends(get_db)
         params.update(search={"host": term, "name": term}, searchByAny=True)
     with saved_api(db) as api:
         rows = api.rows("host.get", params)
-        return {"hosts": [
-            {**{key: visible(row.get(key), api.token) for key in HOST_FIELDS["output"]},
-             "interfaces": [{key: visible(item.get(key), api.token) for key in HOST_FIELDS["selectInterfaces"]}
-                            for item in host_interfaces(row)]}
-            for row in rows[:100]
-        ], "limited": len(rows) > 100}
+        return {"hosts": [visible_host(row, api.token) for row in rows[:100]], "limited": len(rows) > 100}
 
 
 @router.get("/problems")
@@ -141,9 +144,30 @@ def read_problems(db: Session = Depends(get_db)):
 
 def canonical_ip(value: Any) -> str | None:
     try:
-        return str(ipaddress.ip_address(value))
+        address = ipaddress.ip_address(value)
+        return str(getattr(address, "ipv4_mapped", None) or address)
     except ValueError:
         return None
+
+
+@router.get("/inventory")
+def read_inventory(db: Session = Depends(get_db)):
+    if db.get(ZabbixConnection, 1) is None:
+        return {"configured": False, "hosts": []}
+    local_by_ip: dict[str, set[int]] = {}
+    for identifier, ip in db.query(Device.id, Device.ip):
+        if address := canonical_ip(ip):
+            local_by_ip.setdefault(address, set()).add(identifier)
+    with saved_api(db) as api:
+        rows = api.rows("host.get", {**HOST_FIELDS, "sortfield": "host"})
+        hosts = []
+        for row in rows:
+            local_ids: set[int] = set()
+            for interface in host_interfaces(row):
+                if str(interface.get("useip")) == "1" and (address := canonical_ip(interface.get("ip"))):
+                    local_ids.update(local_by_ip.get(address, ()))
+            hosts.append({**visible_host(row, api.token), "local_device_ids": sorted(local_ids)})
+        return {"configured": True, "hosts": hosts}
 
 
 @router.get("/validation")

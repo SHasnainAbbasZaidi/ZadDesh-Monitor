@@ -9,10 +9,15 @@ test('Zabbix settings and read-only device view', async ({ page, request }) => {
   });
   expect(setup.status()).toBe(201);
   const auth = { Authorization: `Bearer ${(await setup.json()).access_token}` };
-  expect((await request.post('/api/v1/devices', { headers: auth, data: {
+  const localResponse = await request.post('/api/v1/devices', { headers: auth, data: {
     name: 'Local validation switch', ip: '192.0.2.10', initial_check_types: ['icmp'],
+  } });
+  expect(localResponse.status()).toBe(201);
+  const local = await localResponse.json();
+  expect((await request.post('/api/v1/devices', { headers: auth, data: {
+    name: 'Local-only switch', ip: '192.0.2.11', initial_check_types: ['icmp'],
   } })).status()).toBe(201);
-  const url = 'https://zabbix.example.test/api_jsonrpc.php';
+  const url = 'http://zabbix.example.test/api_jsonrpc.php';
   let saved = false;
   const timestamp = new Date().toISOString();
   await page.route('**/api/v1/zabbix/**', async route => {
@@ -23,6 +28,13 @@ test('Zabbix settings and read-only device view', async ({ page, request }) => {
         saved = true;
       }
       await route.fulfill({ json: { configured: saved, api_url: saved ? url : null, version: saved ? '7.4.1' : null } });
+    } else if (path === 'inventory') {
+      await route.fulfill({ json: { configured: true, hosts: [
+        { hostid: '7', host: 'external-switch', name: 'External switch', status: '0', local_device_ids: [local.id],
+          interfaces: [{ ip: '192.0.2.10', useip: '1', available: '1' }] },
+        { hostid: '8', host: 'zabbix-only', name: 'Zabbix-only switch', status: '0', local_device_ids: [],
+          interfaces: [{ ip: '192.0.2.12', useip: '1', available: '0' }] },
+      ] } });
     } else if (path === 'hosts') {
       await route.fulfill({ json: { hosts: [{ hostid: '7', host: 'external-switch', name: 'External switch', status: '0',
         interfaces: [{ ip: '192.0.2.10', useip: '1' }] }], limited: false } });
@@ -42,7 +54,8 @@ test('Zabbix settings and read-only device view', async ({ page, request }) => {
   await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByLabel('Zabbix HTTPS URL').fill(url);
+  await page.getByLabel('Zabbix URL').fill(url);
+  await expect(page.getByText('HTTP sends the token unencrypted between ZadDesh and Zabbix.')).toBeVisible();
   const tokenField = page.getByLabel('Zabbix API token');
   await expect(tokenField).toHaveAttribute('type', 'password');
   await tokenField.fill(token);
@@ -51,6 +64,13 @@ test('Zabbix settings and read-only device view', async ({ page, request }) => {
   await expect(tokenField).toHaveValue('');
 
   await page.getByRole('button', { name: 'Devices', exact: true }).click();
+  await expect(page.getByRole('row').filter({ hasText: 'External switch' })).toHaveCount(1);
+  await expect(page.getByRole('row').filter({ hasText: 'Local validation switch' })).toHaveCount(0);
+  await expect(page.getByRole('row').filter({ hasText: 'Local-only switch' })).toBeVisible();
+  await expect(page.getByRole('row').filter({ hasText: 'Zabbix-only switch' })).toBeVisible();
+  await page.getByRole('button', { name: 'Local telemetry for External switch' }).click();
+  await expect(page.getByRole('dialog', { name: /Telemetry: Local validation switch/ })).toBeVisible();
+  await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Zabbix devices' }).click();
   await expect(page.getByRole('heading', { name: 'Zabbix hosts' })).toBeVisible();
   await expect(page.getByText('External switch', { exact: true }).first()).toBeVisible();

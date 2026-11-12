@@ -7,7 +7,8 @@ import type { Device } from '../../types';
 
 const endpoint = '/zabbix';
 type Connection = { configured: boolean; api_url: string | null; version: string | null };
-type Host = { hostid: string; name: string; host: string; status: string; interfaces: { ip: string; dns: string; useip: string }[] };
+type Host = { hostid: string; name: string; host: string; status: string; interfaces: { ip: string; dns: string; useip: string; available?: string }[] };
+export type ZabbixInventoryHost = Host & { local_device_ids: number[] };
 type Inventory = { hosts: Host[]; limited: boolean };
 type Problem = { eventid: string; name: string; severity: string; clock: string; acknowledged: string };
 type Reading = { up: boolean; timestamp: string };
@@ -55,7 +56,7 @@ export function ZabbixSettings() {
 
   return <Card title="Zabbix connection" subtitle={connection?.configured ? `Connected · Zabbix ${connection.version}` : 'Read-only integration'}>
     <form className="flex flex-wrap items-end gap-3" onSubmit={event => { event.preventDefault(); void change(false); }}>
-      <label className="min-w-0 flex-1 text-sm">Zabbix HTTPS URL
+      <label className="min-w-0 flex-1 text-sm">Zabbix URL
         <input className="dash-select mt-1 block w-full" type="url" required maxLength={1900} value={url}
           placeholder="https://zabbix.example.com/zabbix" onChange={event => setUrl(event.target.value)} />
       </label>
@@ -67,6 +68,7 @@ export function ZabbixSettings() {
       {connection?.configured && <button className="ops-button" disabled={busy} type="button" onClick={() => void change(true)}>Disconnect</button>}
     </form>
     <p className="mt-3 text-sm ops-muted">Use a token with read access to the required Zabbix host groups and the host, item and problem API methods.</p>
+    {url.trim().toLowerCase().startsWith('http://') && <p className="mt-2 text-sm ops-muted">HTTP sends the token unencrypted between ZadDesh and Zabbix.</p>}
     {message && <p role="status" className="mt-2 text-sm">{message}</p>}
     {error && <p role="alert" className="mt-2 ops-notice">{error}</p>}
   </Card>;
