@@ -7,7 +7,8 @@ import type { Device } from '../../types';
 
 const endpoint = '/zabbix';
 type Connection = { configured: boolean; api_url: string | null; version: string | null };
-type Host = { hostid: string; name: string; host: string; status: string; interfaces: { ip: string; dns: string; useip: string; available?: string }[] };
+type Host = { hostid: string; name: string; host: string; status: string; active_available?: string; agent_reporting_at?: string;
+  interfaces: { ip: string; dns: string; useip: string; available?: string }[] };
 export type ZabbixInventoryHost = Host & { local_device_ids: number[] };
 type Inventory = { hosts: ZabbixInventoryHost[]; limited: boolean };
 type Problem = { eventid: string; name: string; severity: string; clock: string; acknowledged: string };
@@ -15,6 +16,18 @@ type Reading = { up: boolean; timestamp: string };
 type Validation = { status: 'match' | 'mismatch'; zabbix: Reading; zaddesh: Reading; skew_seconds: number }
   | { status: 'unavailable'; message: string };
 const severities = ['Not classified', 'Info', 'Warning', 'Average', 'High', 'Critical'];
+
+export function zabbixAvailability(host: ZabbixInventoryHost) {
+  if (host.status !== '0') return { status: 'unknown', label: 'Disabled' };
+  const states = [host.active_available, ...host.interfaces.map(item => item.available)];
+  const up = states.includes('1');
+  const down = states.includes('2');
+  if (up && down) return { status: 'warning', label: 'Mixed' };
+  if (up) return { status: 'up', label: 'Available' };
+  if (down) return { status: 'down', label: 'Unavailable' };
+  if (host.agent_reporting_at) return { status: 'up', label: 'Agent reporting' };
+  return { status: 'unknown', label: 'No availability data' };
+}
 
 type ImportResult = { status: 'added' | 'already_added'; checks_created: number; skipped: Record<string, number> };
 
@@ -182,7 +195,7 @@ export function ZabbixDevices({ devices, onImported }: { devices: Device[]; onIm
       {inventory?.hosts.length === 0 && <p className="ops-empty">No accessible Zabbix hosts match.</p>}
       <ul className="divide-y divide-slate-500/25">{inventory?.hosts.map(item => <li key={item.hostid} className="flex flex-wrap items-center gap-3 py-2 text-sm">
         <strong>{item.name || item.host}</strong>
-        <Badge status={item.status === '0' ? 'info' : 'unknown'}>{item.status === '0' ? 'Monitored' : 'Disabled'}</Badge>
+        <Badge status={zabbixAvailability(item).status}>{zabbixAvailability(item).label}</Badge>
         <span className="ops-muted break-all">{item.interfaces.map(value => value.useip === '1' ? value.ip : value.dns).filter(Boolean).join(', ')}</span>
         <div className="ml-auto"><ZabbixAddHostButton host={item} onImported={() => {
           setRefresh(value => value + 1);

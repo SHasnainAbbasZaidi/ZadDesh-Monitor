@@ -30,9 +30,10 @@ test('Zabbix settings and read-only device view', async ({ page, request }) => {
       await route.fulfill({ json: { configured: saved, api_url: saved ? url : null, version: saved ? '7.4.1' : null } });
     } else if (path === 'inventory') {
       await route.fulfill({ json: { configured: true, hosts: [
-        { hostid: '7', host: 'external-switch', name: 'External switch', status: '0', local_device_ids: [local.id],
-          interfaces: [{ ip: '192.0.2.10', useip: '1', available: '1' }] },
+        { hostid: '7', host: 'external-switch', name: 'External switch', status: '0', active_available: '1', local_device_ids: [local.id],
+          interfaces: [{ ip: '192.0.2.10', useip: '1', available: '0' }] },
         { hostid: '8', host: 'zabbix-only', name: 'Zabbix-only switch', status: '0', local_device_ids: [],
+          agent_reporting_at: timestamp,
           interfaces: [{ ip: '192.0.2.12', useip: '1', available: '0' }] },
       ] } });
     } else if (path === 'hosts') {
@@ -73,6 +74,8 @@ test('Zabbix settings and read-only device view', async ({ page, request }) => {
   await expect(page.getByRole('row').filter({ hasText: 'Local validation switch' })).toHaveCount(0);
   await expect(page.getByRole('row').filter({ hasText: 'Local-only switch' })).toBeVisible();
   await expect(page.getByRole('row').filter({ hasText: 'Zabbix-only switch' })).toBeVisible();
+  await expect(page.getByRole('row').filter({ hasText: 'External switch' })).toContainText('Available');
+  await expect(page.getByRole('row').filter({ hasText: 'Zabbix-only switch' })).toContainText('Agent reporting');
   await expect(page.getByRole('button', { name: 'External switch added to ZadDesh' })).toBeDisabled();
   await page.getByRole('button', { name: 'Add Zabbix-only switch to ZadDesh' }).click();
   await expect(page.getByRole('button', { name: 'Zabbix-only switch added to ZadDesh' })).toBeDisabled();

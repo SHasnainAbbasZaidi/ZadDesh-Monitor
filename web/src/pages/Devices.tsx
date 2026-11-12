@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ZabbixAddHostButton, ZabbixDevices, type ZabbixInventoryHost } from '../components/ui/Zabbix';
+import { ZabbixAddHostButton, ZabbixDevices, zabbixAvailability, type ZabbixInventoryHost } from '../components/ui/Zabbix';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
@@ -30,15 +30,6 @@ interface DevicesProps {
 interface MetricSeriesData {
   timestamp: string;
   value: number;
-}
-
-function zabbixHealth(host: ZabbixInventoryHost) {
-  if (host.status !== '0') return 'unknown';
-  const available = host.interfaces.some(item => item.available === '1');
-  const unavailable = host.interfaces.some(item => item.available === '2');
-  if (available && unavailable) return 'warning';
-  if (available) return 'up';
-  return unavailable ? 'down' : 'unknown';
 }
 
 export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
@@ -231,7 +222,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
   const matchesStatus = (status: string) => filterStatus === 'all' || status.toLowerCase() === filterStatus;
   const filteredDevices = localDevices.filter(device =>
     matchesStatus(device.status) && matchesSearch([device.name, device.ip, device.hostname]));
-  const filteredZabbix = zabbixHosts.filter(host => matchesStatus(zabbixHealth(host)) && matchesSearch([
+  const filteredZabbix = zabbixHosts.filter(host => matchesStatus(zabbixAvailability(host).status) && matchesSearch([
     host.name, host.host, ...host.interfaces.flatMap(item => [item.ip, item.dns]),
     ...host.local_device_ids.flatMap(id => {
       const device = devicesById.get(id);
@@ -296,7 +287,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
             }`}
           >
             {st} ({st === 'all' ? localDevices.length + zabbixHosts.length
-              : localDevices.filter(device => device.status === st).length + zabbixHosts.filter(host => zabbixHealth(host) === st).length})
+              : localDevices.filter(device => device.status === st).length + zabbixHosts.filter(host => zabbixAvailability(host).status === st).length})
           </button>
         ))}
       </div>
@@ -323,13 +314,11 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800/80">
               {filteredZabbix.map(host => {
                 const label = host.name || host.host;
-                const health = zabbixHealth(host);
+                const health = zabbixAvailability(host);
                 const addresses = [...new Set(host.interfaces.map(item => item.useip === '1' ? item.ip : item.dns).filter(Boolean))];
                 const local = host.local_device_ids.length === 1 ? devicesById.get(host.local_device_ids[0]) : undefined;
                 return <tr key={`zabbix-${host.hostid}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                  <td className="px-5 py-3.5 whitespace-nowrap"><Badge status={health}>
-                    {host.status !== '0' ? 'Disabled' : health === 'up' ? 'Available' : health === 'down' ? 'Unavailable' : health === 'warning' ? 'Mixed' : 'Unknown'}
-                  </Badge></td>
+                  <td className="px-5 py-3.5 whitespace-nowrap"><Badge status={health.status}>{health.label}</Badge></td>
                   <td className="px-5 py-3.5 font-medium">
                     <div className="flex flex-wrap items-center gap-2">
                       <Server className="h-4 w-4 text-sky-500" aria-hidden="true" />

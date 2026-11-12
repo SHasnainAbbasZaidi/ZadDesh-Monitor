@@ -50,6 +50,13 @@ test('add-on workspace and published diagram access', async ({ page, request }) 
     await expect(page.getByRole('heading', { name: 'Infrastructure overview' })).toBeVisible();
   }
   await page.setViewportSize({ width: 1440, height: 960 });
+  await page.route('**/api/v1/incidents/zabbix?*', route => {
+    const events = new URL(route.request().url()).searchParams.get('kind') === 'events';
+    return route.fulfill({ json: { configured: events, limited: false, entries: events ? [{
+      id: '22', title: 'Zabbix agent recovered', device: 'Zabbix agent fixture', timestamp,
+      severity: 'high', status: 'resolved', category: 'other',
+    }] : [] } });
+  });
   await page.goto('/');
   await signIn('addon-admin');
   const socket = page.waitForEvent('websocket', { predicate: item => item.url().endsWith('/addon-updates') });
@@ -79,6 +86,8 @@ test('add-on workspace and published diagram access', async ({ page, request }) 
   await expect(page.locator('.entry-details[open] .entry-detail-body > p').filter({ hasText: /Probe failed/ })).toBeVisible();
   await page.getByRole('button', { name: 'events', exact: true }).click();
   await expect(page.locator('summary').filter({ hasText: /^Probe down$/ }).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Zabbix events' })).toBeVisible();
+  await expect(page.getByText('Zabbix agent fixture', { exact: true })).toBeVisible();
   if (logToken) {
     await page.getByRole('button', { name: 'logs', exact: true }).click();
     await page.locator('summary').filter({ hasText: /^Link down$/ }).click();

@@ -19,7 +19,7 @@ from zaddesh_core.incidents import utc_now
 from zaddesh_core.models.infrastructure import DeviceCredential
 from zaddesh_core.models.metrics import MetricRaw
 from zaddesh_core.models.zabbix import ZabbixConnection
-from zaddesh_core.security import decrypt_secret
+from zaddesh_core.security import decrypt_secret, encrypt_secret
 from zaddesh_core.zabbix import ZabbixAPI, normalize_url
 
 
@@ -44,7 +44,7 @@ def test_read_only_connection_inventory_problems_and_validation(client, db_sessi
         assert request.url.path == "/zabbix/api_jsonrpc.php"
         assert request.url.scheme == "http" and "sni_hostname" not in request.extensions
         assert request.headers.get("authorization") == (None if method == "apiinfo.version" else "Bearer " + token)
-        if method == "item.get" and "filter" in data["params"]:
+        if method == "item.get" and "key_" in data["params"].get("filter", {}):
             assert data["params"]["filter"]["key_"] == ["icmpping"]
         if method == "item.get" and data["params"].get("hostids") == ["9"]:
             assert "limit" not in data["params"]
@@ -229,3 +229,62 @@ def test_http_connection_reads_hosts_with_bearer_token(monkeypatch):
         finally:
             server.shutdown()
             thread.join(timeout=3)
+
+
+def test_agent_availability_and_incident_feed(client, db_session, admin_headers, viewer_headers, monkeypatch):
+    monkeypatch.setattr(settings.security, "encryption_key", token_hex(32))
+    monkeypatch.setattr(settings.features, "incident_workspace", True)
+    token = token_hex(32)
+    db_session.add(ZabbixConnection(id=1, api_url="http://192.0.2.19/api_jsonrpc.php",
+                                    encrypted_token=encrypt_secret(token), version="7.0.32"))
+    db_session.commit()
+    now = utc_now().replace(microsecond=0, tzinfo=timezone.utc)
+    clock = int(now.timestamp()) - 10
+
+    def record(identifier, name, age=0, value="1"):
+        return {"eventid": identifier, "name": name, "severity": "5", "clock": str(clock - age), "value": value,
+                "hosts": [{"name": "Agent fixture"}]}
+
+    problems = [record("1", "Unavailable by ICMP ping"), record("2", "Agent disconnected"),
+                record("3", "Zabbix agent is not available"), record("4", "Downlink down", 9 * 3600)]
+
+    def upstream(request):
+        data = json.loads(request.content)
+        method, params = data["method"], data["params"]
+        if method == "host.get":
+            assert "active_available" in params["output"]
+            rows = [{"hostid": str(i), "name": f"Agent {i}", "status": "0", "active_available": active,
+                     "interfaces": [{"available": "0"}]} for i, active in enumerate(("1", "0", "0"), 1)]
+        elif method == "item.get":
+            assert params["hostids"] == ["2", "3"]
+            rows = [{"hostid": "2", "lastclock": str(clock), "delay": "1m"},
+                    {"hostid": "3", "lastclock": str(clock - 3600), "delay": "1m"}]
+        elif method == "problem.get":
+            rows = problems
+        else:
+            rows = problems + [record("5", "Uplink down", value="0")]
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": rows})
+
+    @contextmanager
+    def connect(url, key, version=""):
+        with httpx.Client(transport=httpx.MockTransport(upstream)) as transport:
+            yield ZabbixAPI(transport, normalize_url(url), key, version)
+
+    monkeypatch.setattr(routes, "connect", connect)
+    rows = client.get("/api/v1/zabbix/inventory", headers=admin_headers).json()["hosts"]
+    assert rows[0]["active_available"] == "1"
+    assert rows[1]["agent_reporting_at"]
+    assert rows[2]["agent_reporting_at"] is None
+    base = "/api/v1/incidents"
+    feed = base + "/zabbix"
+    critical = client.get(feed + "?category=critical", headers=viewer_headers).json()["entries"]
+    assert [(row["id"], row["category"], row["device"]) for row in critical] == [("1", "device_offline", "Agent fixture")]
+    assert {row["id"] for row in client.get(feed, headers=viewer_headers).json()["entries"]} == {"1", "3"}
+    events = client.get(feed + "?kind=events", headers=viewer_headers).json()["entries"]
+    assert next(row for row in events if row["id"] == "5")["status"] == "resolved"
+    assert client.get(feed, headers={}).status_code == 401
+    start, end = now - timedelta(minutes=1), now
+    result = client.post(base + "/alerts/dismiss", headers=admin_headers, json={"start": start.isoformat(), "end": end.isoformat()})
+    assert result.json() == {"removed": 0, "zabbix_range_applied": True}
+    assert client.get(feed, headers=viewer_headers).json()["entries"] == []
+    assert client.get(feed + "?kind=events", headers=viewer_headers).json()["entries"]

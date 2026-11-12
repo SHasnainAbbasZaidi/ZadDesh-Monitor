@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Literal, cast
+import re
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import AwareDatetime, BaseModel, Field
@@ -13,6 +14,7 @@ from sqlalchemy.orm import Session
 from zaddesh_core.api.deps import get_current_user, require_role
 from zaddesh_core.api.v1.logs import log_collection
 from zaddesh_core.api.v1.stream import notify_change
+from zaddesh_core.api.v1.zabbix import HOST_FIELDS, local_matches, saved_api, source_key, visible
 from zaddesh_core.config import settings
 from zaddesh_core.database import get_db
 from zaddesh_core.incidents import queue_delivery, redact, timeline, utc_now
@@ -22,6 +24,7 @@ from zaddesh_core.models.checks import Check
 from zaddesh_core.models.incidents import Incident, IncidentDelivery, IncidentFilter, IncidentParent, IncidentTimeline
 from zaddesh_core.models.infrastructure import Collector, Device, Site
 from zaddesh_core.models.metrics import MetricRaw
+from zaddesh_core.models.zabbix import ZabbixAlertDismissal, ZabbixConnection
 
 
 def enabled() -> None:
@@ -33,6 +36,10 @@ router = APIRouter(prefix="/incidents", dependencies=[Depends(enabled)], tags=["
 ACTIVE_ALERT_WINDOW = timedelta(hours=8)
 CONNECTION_EVENT_TYPES = ("connect", "disconnect", "connected", "disconnected", "reconnect", "reconnected",
                           "connection_opened", "connection_closed", "connection_lost", "connection_restored")
+ZABBIX_SEVERITY = {"0": "info", "1": "info", "2": "warning", "3": "average", "4": "high", "5": "critical"}
+ZABBIX_OFFLINE = re.compile(r"\b(?:device|host) (?:is )?(?:offline|down)\b|\bunavailable by icmp\b|\bno icmp ping\b", re.I)
+ZABBIX_LINK = re.compile(r"\b(?:uplink|downlink)\b.*\b(?:down|offline|unavailable)\b|\blink down\b.*\b(?:uplink|downlink)\b", re.I)
+ZABBIX_NOISE = re.compile(r"^(?:dis)?connect(?:ed|ion)?(?:\b|:)|\b(?:dis)?connected\b|^reconnected\b", re.I)
 
 
 def connection_noise(title):
@@ -174,6 +181,100 @@ def list_incident_events(
     return {"events": [event_payload(row) for row in rows[:limit]], "has_more": len(rows) > limit}
 
 
+@router.get("/zabbix")
+def zabbix_incident_feed(
+    kind: Literal["problems", "events"] = "problems",
+    category: Literal["critical", "device_offline", "link_down", "other"] | None = None,
+    q: str = Query("", max_length=120), severity: str | None = None, status: str | None = None,
+    type: str | None = None, device_id: int | None = None, site_id: int | None = None,
+    start: AwareDatetime | None = None, end: AwareDatetime | None = None, errors_only: bool = False,
+    _: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    connection = db.get(ZabbixConnection, 1)
+    if connection is None:
+        return {"configured": False, "entries": [], "limited": False}
+    now = utc_now()
+    earliest = naive_utc(start) if start else now - timedelta(days=1)
+    if kind == "problems":
+        earliest = max(earliest, now - ACTIVE_ALERT_WINDOW)
+    latest = naive_utc(end) if end else now
+    alert_types = {"availability": "device_offline", "link": "link_down", "rule": "other"}
+    if earliest > latest or (type and type not in (alert_types if kind == "problems" else {"zabbix_problem", "zabbix_recovery"})):
+        return {"configured": True, "entries": [], "limited": False}
+    params: dict[str, Any] = {"source": 0, "object": 0, "sortfield": "eventid", "sortorder": "DESC",
+              "time_from": int(earliest.replace(tzinfo=timezone.utc).timestamp()),
+              "time_till": int(latest.replace(tzinfo=timezone.utc).timestamp()), "limit": 500}
+    with saved_api(db) as api:
+        if device_id is not None or site_id is not None:
+            query = db.query(Device.id)
+            if device_id is not None:
+                query = query.filter(Device.id == device_id)
+            if site_id is not None:
+                query = query.filter(Device.site_id == site_id)
+            selected_ids = {row[0] for row in query}
+            inventory = api.rows("host.get", HOST_FIELDS)
+            matching = local_matches(db, connection.api_url, inventory)
+            host_ids = [key for key, ids in matching.items() if selected_ids.intersection(ids)]
+            if not host_ids:
+                return {"configured": True, "entries": [], "limited": False}
+            params["hostids"] = host_ids
+        fields = ["eventid", "name", "severity", "clock", "acknowledged", "suppressed"]
+        if kind == "problems":
+            records = api.rows("problem.get", {**params, "recent": False, "output": fields})
+            event_ids = [row["eventid"] for row in records if row.get("eventid")]
+            if event_ids:
+                try:
+                    metadata = api.rows("event.get", {"eventids": event_ids, "output": ["eventid"],
+                                                      "selectHosts": ["name", "host"]})
+                except HTTPException:
+                    metadata = []
+                host_by_event = {str(row.get("eventid")): row.get("hosts") for row in metadata}
+            else:
+                host_by_event = {}
+        else:
+            records = api.rows("event.get", {**params, "output": [*fields, "value"], "selectHosts": ["name", "host"]})
+            host_by_event = {str(row.get("eventid")): row.get("hosts") for row in records}
+        dismissed = [] if kind == "events" else db.query(ZabbixAlertDismissal.start, ZabbixAlertDismissal.end).filter(
+            ZabbixAlertDismissal.source_key == source_key(connection.api_url),
+            ZabbixAlertDismissal.end >= earliest, ZabbixAlertDismissal.start <= latest,
+        ).all()
+        entries: list[dict[str, str]] = []
+        for row in records:
+            event_id = str(row.get("eventid"))
+            stamp = str(row.get("clock"))
+            if not (event_id.isascii() and event_id.isdecimal() and stamp.isascii() and stamp.isdecimal() and len(stamp) <= 10):
+                continue
+            time = datetime.fromtimestamp(int(stamp), timezone.utc).replace(tzinfo=None)
+            if not earliest.replace(microsecond=0) <= time <= latest or any(left <= time <= right for left, right in dismissed):
+                continue
+            title = visible(row.get("name"), api.token)
+            group = "device_offline" if ZABBIX_OFFLINE.search(title) else "link_down" if ZABBIX_LINK.search(title) else "other"
+            if group == "other" and ZABBIX_NOISE.search(title):
+                continue
+            if category and (group == "other" if category == "critical" else category != group):
+                continue
+            if kind == "problems" and type and group != alert_types.get(type):
+                continue
+            recovered = kind == "events" and str(row.get("value")) == "0"
+            state = ("resolved" if recovered else "suppressed" if str(row.get("suppressed")) == "1"
+                     else "acknowledged" if str(row.get("acknowledged")) == "1" else "active")
+            level = ZABBIX_SEVERITY.get(str(row.get("severity")), "info")
+            event_type = "zabbix_recovery" if recovered else "zabbix_problem"
+            hosts = host_by_event.get(event_id)
+            names = ", ".join(visible(item.get("name") or item.get("host"), api.token)
+                              for item in hosts if isinstance(item, dict)) if isinstance(hosts, list) else ""
+            if (status and status != state) or (severity and severity != level) or (kind == "events" and type and type != event_type):
+                continue
+            if errors_only and (recovered or level not in {"average", "high", "critical"}):
+                continue
+            if q and q.casefold() not in f"{title} {names}".casefold():
+                continue
+            entries.append({"id": event_id, "title": title, "device": names, "timestamp": time.replace(tzinfo=timezone.utc).isoformat(),
+                            "status": state, "severity": level, "category": group})
+    entries.sort(key=lambda row: (row["timestamp"], int(row["id"])), reverse=True)
+    return {"configured": True, "entries": entries[:100], "limited": len(entries) > 100 or len(records) >= 500}
+
+
 @router.get("/alerts/{alert_id}")
 def incident_detail(alert_id: int, _: User = Depends(get_current_user), db: Session = Depends(get_db)):
     row = joined_alerts(db).filter(Alert.id == alert_id).first()
@@ -245,13 +346,21 @@ def dismiss_alerts(payload: AlertPeriod, user: User = Depends(require_role(["adm
         Alert.triggered_at.between(start, end), alert_not_dismissed(),
     ).values(dismissed_episode_at=Alert.triggered_at)))
     removed = result.rowcount
-    if removed:
+    connection = db.get(ZabbixConnection, 1)
+    external = connection is not None and start <= utc_now()
+    if connection and external:
+        key = source_key(connection.api_url)
+        end_bound = min(end, utc_now()).replace(microsecond=0)
+        start_bound = start.replace(microsecond=0)
+        if not db.query(ZabbixAlertDismissal.id).filter_by(source_key=key, start=start_bound, end=end_bound).first():
+            db.add(ZabbixAlertDismissal(source_key=key, start=start_bound, end=end_bound))
+    if removed or external:
         db.add(AuditLog(user_id=user.id, action="alerts.dismissed_by_period", entity_type="alert",
                         details={"start": iso(start), "end": iso(end), "removed": removed}))
     db.commit()
-    if removed:
+    if removed or external:
         notify_change()
-    return {"removed": removed}
+    return {"removed": removed, **({"zabbix_range_applied": True} if external else {})}
 
 
 @router.post("/actions")

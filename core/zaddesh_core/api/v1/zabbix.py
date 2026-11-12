@@ -24,9 +24,7 @@ from zaddesh_core.models.metrics import MetricRaw
 from zaddesh_core.models.zabbix import ZabbixConnection, ZabbixHostImport
 from zaddesh_core.security import allows_secret_transport, decrypt_secret, encrypt_secret
 from zaddesh_core.zabbix import ZabbixAPI, normalize_url
-from zaddesh_core.zabbix_import import (
-    canonical_ip, interface_target, prepare_checks, resolve_interface_credentials, target_name,
-)
+from zaddesh_core.zabbix_import import canonical_ip, duration, interface_target, prepare_checks, resolve_interface_credentials, target_name
 
 admin = require_role(["admin"])
 router = APIRouter(prefix="/zabbix", tags=["Zabbix"], dependencies=[Depends(admin)])
@@ -87,6 +85,8 @@ def visible_host(row: dict[str, Any], token: str) -> dict[str, Any]:
         **{key: visible(row.get(key), token) for key in HOST_FIELDS["output"]},
         "interfaces": [{key: visible(item.get(key), token) for key in HOST_FIELDS["selectInterfaces"]}
                        for item in host_interfaces(row)],
+        "active_available": visible(str(row.get("active_available", "0")), token),
+        "agent_reporting_at": row.get("agent_reporting_at"),
     }
 
 
@@ -116,6 +116,41 @@ def local_matches(db: Session, url: str, rows: list[dict[str, Any]]) -> dict[str
 def inventory_hosts(db: Session, api: ZabbixAPI, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     matches = local_matches(db, str(api.url), rows)
     return [{**visible_host(row, api.token), "local_device_ids": matches[str(row.get("hostid"))]} for row in rows]
+
+
+def read_agent_hosts(api: ZabbixAPI, params: dict[str, Any]) -> list[dict[str, Any]]:
+    version = tuple(int(part) for part in api.version.split(".")[:2])
+    if version >= (6, 2):
+        params = {**params, "output": [*HOST_FIELDS["output"], "active_available"]}
+    return api.rows("host.get", params)
+
+
+def annotate_agent_reporting(api: ZabbixAPI, rows: list[dict[str, Any]]) -> None:
+    unknown = {str(row["hostid"]): row for row in rows if row.get("hostid") and str(row.get("status")) == "0"
+               and str(row.get("active_available", "0")) not in {"1", "2"}
+               and not any(str(i.get("available")) in {"1", "2"} for i in host_interfaces(row))}
+    if not unknown:
+        return
+    try:
+        items = api.rows("item.get", {"hostids": list(unknown), "output": ["hostid", "lastclock", "delay"],
+                                      "filter": {"type": ["0", "7"], "status": "0", "state": "0"}, "limit": 5000})
+    except HTTPException:
+        return  # Native availability remains useful when item history is unavailable.
+    now = int(datetime.now(timezone.utc).timestamp())
+    latest: dict[str, int] = {}
+    for item in items:
+        host_id = str(item.get("hostid"))
+        if host_id not in unknown:
+            continue
+        value = str(item.get("lastclock"))
+        if not value.isascii() or not value.isdecimal() or len(value) > 12:
+            continue
+        stamp = int(value)
+        freshness = min(1800, max(300, 2 * (duration(item.get("delay")) or 0)))
+        if now - freshness <= stamp <= now + 30:
+            latest[host_id] = max(latest.get(host_id, 0), stamp)
+    for host_id, stamp in latest.items():
+        unknown[host_id]["agent_reporting_at"] = datetime.fromtimestamp(stamp, timezone.utc).isoformat()
 
 
 @router.get("/connection")
@@ -163,7 +198,8 @@ def read_hosts(q: str = Query("", max_length=120), db: Session = Depends(get_db)
     if term := q.strip():
         params.update(search={"host": term, "name": term}, searchByAny=True)
     with saved_api(db) as api:
-        rows = api.rows("host.get", params)
+        rows = read_agent_hosts(api, params)
+        annotate_agent_reporting(api, rows[:100])
         return {"hosts": inventory_hosts(db, api, rows[:100]), "limited": len(rows) > 100}
 
 
@@ -248,7 +284,8 @@ def read_inventory(db: Session = Depends(get_db)):
     if db.get(ZabbixConnection, 1) is None:
         return {"configured": False, "hosts": []}
     with saved_api(db) as api:
-        rows = api.rows("host.get", {**HOST_FIELDS, "sortfield": "host"})
+        rows = read_agent_hosts(api, {**HOST_FIELDS, "sortfield": "host"})
+        annotate_agent_reporting(api, rows)
         return {"configured": True, "hosts": inventory_hosts(db, api, rows)}
 
 

@@ -18,6 +18,7 @@ export const AppContent: React.FC = () => {
   const { user, isLoading, isSetupRequired } = useAuth();
   const [currentTab, setCurrentTab] = useState('overview');
   const [activeAlertsCount, setActiveAlertsCount] = useState(0);
+  const [zabbixCriticalCount, setZabbixCriticalCount] = useState(0);
   const [demoMode, setDemoMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [features, setFeatures] = useState({ incident_workspace: false, network_diagram_beta: false });
@@ -41,6 +42,19 @@ export const AppContent: React.FC = () => {
     fetchBadge();
     const interval = setInterval(fetchBadge, 15000);
     return () => { active = false; clearInterval(interval); };
+  }, [user, features.incident_workspace]);
+
+  useEffect(() => {
+    if (!user || !features.incident_workspace) return;
+    const controller = new AbortController();
+    function refresh() {
+      void request<{ entries: unknown[] }>('/incidents/zabbix?category=critical', { signal: controller.signal })
+        .then(value => { if (!controller.signal.aborted) setZabbixCriticalCount(value.entries.length); })
+        .catch(() => {});
+    }
+    refresh();
+    const timer = window.setInterval(refresh, 60_000);
+    return () => { controller.abort(); window.clearInterval(timer); };
   }, [user, features.incident_workspace]);
 
   if (isLoading) {
@@ -69,7 +83,7 @@ export const AppContent: React.FC = () => {
         setCurrentTab(tab);
         setSearchQuery('');
       }}
-      activeAlertsCount={activeAlertsCount}
+      activeAlertsCount={activeAlertsCount + (features.incident_workspace ? zabbixCriticalCount : 0)}
       networkDiagram={features.network_diagram_beta}
       onSearchChange={admin ? (query) => {
         setSearchQuery(query);

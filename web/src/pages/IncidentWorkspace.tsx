@@ -28,6 +28,8 @@ type Detail = Row & {
   notifications: { id: number; channel: string; event: string; status: string; outcome?: string; timestamp: string }[];
 };
 type Saved = { id: number; name: string; values: Filters };
+type ZabbixEntry = { id: string; title: string; device: string; timestamp: string; status: string; severity: string; category: Row['category'] };
+type ZabbixFeed = { configured: boolean; entries: ZabbixEntry[]; limited: boolean };
 
 function queryString(filters: Filters) {
   const query = new URLSearchParams();
@@ -91,6 +93,9 @@ export function IncidentWorkspace({ initialTab = 'critical' }: { initialTab?: Ta
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState('');
   const [notice, setNotice] = useState('');
+  const [zabbixFeed, setZabbixFeed] = useState<ZabbixFeed>();
+  const [zabbixError, setZabbixError] = useState('');
+  const [zabbixRefresh, setZabbixRefresh] = useState(0);
   const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 767px)').matches);
   const time = (value: string) => new Date(value).toLocaleString(undefined, utc ? { timeZone: 'UTC', timeZoneName: 'short' } : {});
   useAddonUpdates(() => setRefresh(value => value + 1), paused);
@@ -143,6 +148,26 @@ export function IncidentWorkspace({ initialTab = 'critical' }: { initialTab?: Ta
   }, [alertView, eventView, filters, offset, refresh, tab]);
 
   useEffect(() => {
+    if ((!currentAlerts && !eventView) || offset !== 0) return;
+    const controller = new AbortController();
+    const query = new URLSearchParams(queryString(filters));
+    query.set('kind', currentAlerts ? 'problems' : 'events');
+    if (tab === 'critical') query.set('category', filters.category || 'critical');
+    if (tab === 'errors') query.set('errors_only', 'true');
+    async function loadZabbix() {
+      try {
+        const result = await request<ZabbixFeed>(`/incidents/zabbix?${query}`, { signal: controller.signal });
+        if (!controller.signal.aborted) { setZabbixFeed(result); setZabbixError(''); }
+      } catch (failure) {
+        if (!controller.signal.aborted) setZabbixError((failure as Error).message);
+      }
+    }
+    void loadZabbix();
+    const timer = paused ? undefined : window.setInterval(loadZabbix, 60_000);
+    return () => { controller.abort(); window.clearInterval(timer); };
+  }, [currentAlerts, eventView, filters, offset, paused, tab, zabbixRefresh]);
+
+  useEffect(() => {
     if (expanded === undefined) return;
     const controller = new AbortController();
     void request<Detail>(`/incidents/alerts/${expanded}`, { signal: controller.signal }).then(result => {
@@ -175,12 +200,13 @@ export function IncidentWorkspace({ initialTab = 'critical' }: { initialTab?: Ta
     }
     setRemoving(true); setRemoveError('');
     try {
-      const result = await request<{ removed: number }>('/incidents/alerts/dismiss', {
+      const result = await request<{ removed: number; zabbix_range_applied?: boolean }>('/incidents/alerts/dismiss', {
         method: 'POST', body: JSON.stringify({ start: new Date(removeStart).toISOString(), end: new Date(removeEnd).toISOString() }),
       });
       setRemoveOpen(false); setRemoveStart(''); setRemoveEnd('');
       setSelected([]); setExpanded(undefined); setOffset(0); setRefresh(value => value + 1);
-      setNotice(`${result.removed} ${result.removed === 1 ? 'alert' : 'alerts'} removed from the workspace.`);
+      setZabbixRefresh(value => value + 1);
+      setNotice(`${result.removed} ${result.removed === 1 ? 'alert' : 'alerts'} removed from the workspace.${result.zabbix_range_applied ? ' The date range also applies to Zabbix alerts.' : ''}`);
     } catch (failure) {
       setRemoveError((failure as Error).message);
     } finally {
@@ -202,10 +228,11 @@ export function IncidentWorkspace({ initialTab = 'critical' }: { initialTab?: Ta
       {views.map(([view, label]) => <button className="ops-button capitalize" key={view} aria-pressed={tab === view} onClick={() => {
         if (tab === view) return;
         setTab(view); setDraft({}); setFilters({}); setOffset(0); setExpanded(undefined); setSelected([]); setLoading(true); setLoadError(''); setError('');
+        setZabbixFeed(undefined); setZabbixError('');
       }}>{label}</button>)}
       <button className="ops-button" aria-pressed={utc} onClick={() => setUtc(!utc)}>{utc ? 'UTC' : 'Local time'}</button>
       <button className="ops-button" onClick={() => setPaused(!paused)}>{paused ? 'Resume live updates' : 'Pause live updates'}</button>
-      <button className="ops-button" onClick={() => setRefresh(value => value + 1)}>Refresh</button>
+      <button className="ops-button" onClick={() => { setRefresh(value => value + 1); setZabbixRefresh(value => value + 1); }}>Refresh</button>
     </div>
     {error && <p role="alert" className="ops-notice">{error}</p>}
     {notice && <p role="status" className="ops-notice">{notice}</p>}
@@ -321,7 +348,22 @@ export function IncidentWorkspace({ initialTab = 'critical' }: { initialTab?: Ta
       <EntryDetails title={logTitle(row.message)}><p className="text-sm">{row.message}</p><Raw value={row} /></EntryDetails>
       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs"><Badge status={row.severity} /> <span>{row.source} · {time(row.timestamp)}</span></div>
     </Card>)}
-    {!loading && !loadError && (alertView ? !alerts.length : eventView ? !events.length : !logs.length) && <p className="ops-empty">
+    {(currentAlerts || eventView) && offset === 0 && (zabbixError || zabbixFeed?.configured) && <Card title={currentAlerts ? 'Zabbix problems' : 'Zabbix events'}>
+      {zabbixError && <p role="alert" className="ops-notice">Could not load Zabbix data. {zabbixError}</p>}
+      {zabbixFeed?.limited && <p className="ops-muted text-sm">Showing up to 100 recent matches. Narrow the date range to refine the list.</p>}
+      {zabbixFeed?.entries.length === 0 && !zabbixError && <p className="ops-muted text-sm">No Zabbix entries match this view.</p>}
+      <ul className="divide-y divide-slate-500/25">{zabbixFeed?.entries.map(entry => <li key={entry.id} className="py-2 text-sm">
+        <EntryDetails title={entry.category === 'device_offline' ? 'Device offline' : incidentTitle(entry.title)}>
+          <p>{entry.title}</p>
+        </EntryDetails>
+        <div className="flex flex-wrap items-center gap-2 text-xs"><Badge status={entry.severity} />
+          <Badge status={entry.status}>{entry.status === 'active' ? 'Open' : entry.status}</Badge>
+          {entry.device && <span>{entry.device}</span>}<time>{time(entry.timestamp)}</time>
+        </div>
+      </li>)}</ul>
+    </Card>}
+    {!loading && !loadError && !((currentAlerts || eventView) && offset === 0 && zabbixFeed?.entries.length)
+      && (alertView ? !alerts.length : eventView ? !events.length : !logs.length) && <p className="ops-empty">
       {tab === 'critical' ? 'No current critical errors.' : tab === 'history' ? 'No alert history matches these filters.'
         : tab === 'logs' && !Object.values(filters).some(Boolean) ? 'No infrastructure logs have been received yet.' : `No ${tab} match these filters.`}
     </p>}
