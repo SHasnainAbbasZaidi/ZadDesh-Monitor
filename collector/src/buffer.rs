@@ -65,9 +65,13 @@ impl DiskBuffer {
         Ok(())
     }
 
-    pub fn peek(&self) -> io::Result<Option<(PathBuf, Vec<MetricPoint>)>> {
+    pub fn directory(&self) -> &Path {
+        &self.directory
+    }
+
+    pub fn peek(directory: &Path) -> io::Result<Option<(PathBuf, Vec<MetricPoint>)>> {
         let mut first = None;
-        for entry in fs::read_dir(&self.directory)? {
+        for entry in fs::read_dir(directory)? {
             let path = entry?.path();
             if batch_index(&path).is_some() && first.as_ref().is_none_or(|current| &path < current)
             {
@@ -115,17 +119,17 @@ mod tests {
         let mut queue = DiskBuffer::open(path.clone(), 1).unwrap();
         queue.persist(&[point(10.0)]).unwrap();
         queue.persist(&[point(20.0)]).unwrap();
-        let (first, _) = queue.peek().unwrap().unwrap();
+        let (first, _) = DiskBuffer::peek(&path).unwrap().unwrap();
         drop(queue);
         let queue = DiskBuffer::open(path.clone(), 1).unwrap();
-        let (same, points) = queue.peek().unwrap().unwrap();
+        let (same, points) = DiskBuffer::peek(queue.directory()).unwrap().unwrap();
         assert_eq!(first, same);
         assert_eq!(points[0].value, 10.0);
         fs::remove_file(same).unwrap();
-        let (second, points) = queue.peek().unwrap().unwrap();
+        let (second, points) = DiskBuffer::peek(&path).unwrap().unwrap();
         assert_eq!(points[0].value, 20.0);
         fs::remove_file(second).unwrap();
-        assert!(queue.peek().unwrap().is_none());
+        assert!(DiskBuffer::peek(&path).unwrap().is_none());
         fs::remove_dir(path).unwrap();
     }
 }

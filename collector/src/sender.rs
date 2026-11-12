@@ -3,8 +3,10 @@ use crate::config::CollectorConfig;
 use crate::types::{MetricIngestBatch, MetricPoint};
 use reqwest::Client;
 use std::fs;
+use std::path::Path;
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
+use tokio::sync::oneshot;
 use tokio::time::{interval, sleep, MissedTickBehavior};
 use tracing::{error, info, warn};
 
@@ -13,6 +15,69 @@ pub struct MetricSender {
     config: CollectorConfig,
     disk_buffer: DiskBuffer,
     rx: Receiver<MetricPoint>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::collections::HashMap;
+    use tokio::net::TcpListener;
+    use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn slow_upload_does_not_stop_spooling() {
+        let core = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", core.local_addr().unwrap());
+        let directory = std::env::temp_dir().join(format!(
+            "zaddesh-sender-{}-{}",
+            std::process::id(),
+            core.local_addr().unwrap().port(),
+        ));
+        let config = CollectorConfig::parse_from([
+            "collector",
+            "--token",
+            "test",
+            "--server-url",
+            &url,
+            "--batch-size",
+            "1",
+            "--flush-interval-secs",
+            "1",
+        ]);
+        let point = |value| MetricPoint {
+            device_id: 1,
+            check_id: Some(1),
+            metric_key: "icmp.rtt_avg".into(),
+            timestamp: chrono::Utc::now(),
+            value,
+            tags: HashMap::new(),
+        };
+        let mut queue = DiskBuffer::open(directory.clone(), 1).unwrap();
+        queue.persist(&[point(1.0)]).unwrap();
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let sender = tokio::spawn(MetricSender::new(config, queue, rx).run());
+
+        // Keep the first request open while another poll completes.
+        let (_request, _) = timeout(Duration::from_secs(2), core.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        tx.send(point(2.0)).await.unwrap();
+        let second = directory.join("00000000000000000001.json");
+        let persisted = timeout(Duration::from_secs(2), async {
+            while !second.exists() {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        sender.abort();
+        let _ = sender.await;
+        let (_, oldest) = DiskBuffer::peek(&directory).unwrap().unwrap();
+        fs::remove_dir_all(directory).unwrap();
+        assert!(persisted.is_ok());
+        assert_eq!(oldest[0].value, 1.0);
+    }
 }
 
 impl MetricSender {
@@ -32,40 +97,73 @@ impl MetricSender {
         }
     }
 
-    pub async fn run(mut self) {
-        let mut pending = Vec::with_capacity(self.config.batch_size);
-        let mut flush_timer = interval(Duration::from_secs(self.config.flush_interval_secs));
-        flush_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    pub async fn run(self) {
+        let Self {
+            client,
+            config,
+            mut disk_buffer,
+            mut rx,
+        } = self;
+        let directory = disk_buffer.directory().to_owned();
+        let flush_interval = Duration::from_secs(config.flush_interval_secs);
+        let (closed, mut finished) = oneshot::channel();
+        let mut delivery_timer = interval(flush_interval);
+        delivery_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let deliver = async {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut finished => break,
+                    _ = delivery_timer.tick() => Self::deliver(&client, &config, &directory).await,
+                }
+            }
+            Self::deliver(&client, &config, &directory).await;
+        };
+        let spool = async {
+            Self::spool(&mut disk_buffer, &mut rx, config.batch_size, flush_interval).await;
+            let _ = closed.send(());
+        };
         info!("Metric ingestion sender started");
+        // Keep writing the ordered disk queue even when the core is slow or unavailable.
+        tokio::join!(spool, deliver);
+    }
+
+    async fn spool(
+        disk_buffer: &mut DiskBuffer,
+        rx: &mut Receiver<MetricPoint>,
+        batch_size: usize,
+        flush_interval: Duration,
+    ) {
+        let mut pending = Vec::with_capacity(batch_size);
+        let mut flush_timer = interval(flush_interval);
+        flush_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                point = self.rx.recv() => match point {
+                point = rx.recv() => match point {
                     Some(point) => {
                         pending.push(point);
-                        if pending.len() >= self.config.batch_size {
-                            self.persist(&mut pending).await;
+                        if pending.len() >= batch_size {
+                            Self::persist(disk_buffer, &mut pending).await;
                         }
                     }
                     None => {
-                        self.persist(&mut pending).await;
-                        self.deliver().await;
+                        Self::persist(disk_buffer, &mut pending).await;
                         break;
                     }
                 },
                 _ = flush_timer.tick() => {
-                    self.persist(&mut pending).await;
-                    self.deliver().await;
+                    Self::persist(disk_buffer, &mut pending).await;
                 }
             }
         }
     }
 
-    async fn persist(&mut self, pending: &mut Vec<MetricPoint>) {
+    async fn persist(disk_buffer: &mut DiskBuffer, pending: &mut Vec<MetricPoint>) {
         if pending.is_empty() {
             return;
         }
         loop {
-            match self.disk_buffer.persist(pending) {
+            match disk_buffer.persist(pending) {
                 Ok(()) => {
                     pending.clear();
                     return;
@@ -78,10 +176,10 @@ impl MetricSender {
         }
     }
 
-    async fn deliver(&self) {
-        let url = format!("{}/api/v1/metrics/ingest", self.config.server_url);
+    async fn deliver(client: &Client, config: &CollectorConfig, directory: &Path) {
+        let url = format!("{}/api/v1/metrics/ingest", config.server_url);
         for _ in 0..16 {
-            let (path, points) = match self.disk_buffer.peek() {
+            let (path, points) = match DiskBuffer::peek(directory) {
                 Ok(Some(batch)) => batch,
                 Ok(None) => return,
                 Err(error) => {
@@ -90,13 +188,12 @@ impl MetricSender {
                 }
             };
             let batch = MetricIngestBatch {
-                collector_id: Some(self.config.collector_id),
+                collector_id: Some(config.collector_id),
                 points,
             };
-            match self
-                .client
+            match client
                 .post(&url)
-                .bearer_auth(&self.config.token)
+                .bearer_auth(&config.token)
                 .json(&batch)
                 .send()
                 .await

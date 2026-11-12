@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, SemaphorePermit};
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
@@ -15,7 +15,8 @@ pub struct Scheduler {
     config: CollectorConfig,
     client: Client,
     metric_tx: Sender<MetricPoint>,
-    concurrency_pool: Arc<Semaphore>,
+    concurrency_pool: Semaphore,
+    snmp_pool: Semaphore,
 }
 
 impl Scheduler {
@@ -25,13 +26,15 @@ impl Scheduler {
             .build()
             .unwrap_or_default();
 
-        let concurrency_pool = Arc::new(Semaphore::new(config.concurrency_limit));
+        let limit = config.concurrency_limit;
+        let reserved = (limit / 10).clamp(1, 32).min(limit - 1);
 
         Self {
             config,
             client,
             metric_tx,
-            concurrency_pool,
+            concurrency_pool: Semaphore::new(limit),
+            snmp_pool: Semaphore::new(limit - reserved),
         }
     }
 
@@ -110,24 +113,37 @@ impl Scheduler {
         Ok(body.tasks)
     }
 
+    async fn acquire_probe_slots(
+        &self,
+        is_snmp: bool,
+    ) -> Option<(SemaphorePermit<'_>, Option<SemaphorePermit<'_>>)> {
+        // Limit SNMP independently so availability probes can start during SNMP bursts.
+        let snmp_permit = if is_snmp {
+            Some(self.snmp_pool.acquire().await.ok()?)
+        } else {
+            None
+        };
+        Some((self.concurrency_pool.acquire().await.ok()?, snmp_permit))
+    }
+
     async fn run_check_loop(&self, task: CheckTask) {
         let interval_secs = task.interval_seconds.max(5);
+        let is_snmp = task.check_type == "snmp";
         debug!(
             "Worker spawned for check #{} ('{}' - target: {}) interval: {}s",
             task.check_id, task.name, task.target, interval_secs
         );
 
-        // Add initial random jitter (0 - 2000ms) to spread initial probe load
-        let initial_jitter = rand::thread_rng().gen_range(0..2000);
+        // Spread SNMP startup work across the first polling window, capped at 30 seconds.
+        let jitter_ms = if is_snmp {
+            interval_secs.min(30) * 1000
+        } else {
+            2000
+        };
+        let initial_jitter = rand::thread_rng().gen_range(0..jitter_ms);
         sleep(Duration::from_millis(initial_jitter)).await;
 
-        loop {
-            // Acquire permit from concurrency pool to enforce bounded concurrency
-            let permit = match self.concurrency_pool.acquire().await {
-                Ok(p) => p,
-                Err(_) => break, // semaphore closed
-            };
-
+        while let Some(permits) = self.acquire_probe_slots(is_snmp).await {
             let mut result = execute_probe(&task).await;
             for _ in 0..task.retries {
                 if result.status == ProbeStatus::Ok || result.metrics.is_empty() {
@@ -135,7 +151,7 @@ impl Scheduler {
                 }
                 result = execute_probe(&task).await;
             }
-            drop(permit); // Release permit immediately after probe finishes
+            drop(permits); // Release capacity before forwarding telemetry.
 
             debug!(
                 "Check #{} for device {} finished: {} ({} metrics generated)",
@@ -158,5 +174,37 @@ impl Scheduler {
             let sleep_duration = Duration::from_secs_f64((interval_secs as f64) * jitter_pct);
             sleep(sleep_duration).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn snmp_saturation_leaves_capacity_for_availability_probes() {
+        let config = CollectorConfig::parse_from([
+            "collector",
+            "--token",
+            "test",
+            "--concurrency-limit",
+            "2",
+        ]);
+        let (tx, _) = tokio::sync::mpsc::channel(1);
+        let scheduler = Scheduler::new(config, tx);
+        let _snmp = scheduler.acquire_probe_slots(true).await.unwrap();
+        let wait = Duration::from_millis(20);
+        assert!(timeout(wait, scheduler.acquire_probe_slots(true))
+            .await
+            .is_err());
+        let _availability = timeout(wait, scheduler.acquire_probe_slots(false))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(timeout(wait, scheduler.acquire_probe_slots(false))
+            .await
+            .is_err());
     }
 }
