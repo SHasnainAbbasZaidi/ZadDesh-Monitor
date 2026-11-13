@@ -126,6 +126,14 @@ test('add-on workspace and published diagram access', async ({ page, request }) 
     data: { source: graph.nodes[0].id, target: graph.nodes[1].id, source_port: 'Gi0/1', target_port: 'Gi0/2' },
   })).status()).toBe(204);
   await expect(page.getByRole('img', { name: 'Network diagram with 2 nodes and 1 links' })).toBeVisible();
+  const workspace = page.getByRole('region', { name: 'Topology workspace' });
+  await workspace.getByPlaceholder('Find a node').fill('Fixture router');
+  await expect(workspace.getByRole('button', { name: /Fixture switch/ })).toHaveCount(0);
+  await workspace.getByRole('button', { name: /Fixture router/ }).click();
+  await expect(workspace.getByLabel('Node label')).toHaveValue('Fixture router');
+  await workspace.getByLabel('Node label').fill('Renamed fixture router');
+  await workspace.getByRole('button', { name: 'Save node' }).click();
+  await expect(workspace.getByRole('heading', { name: /Renamed fixture router/ })).toBeVisible();
   for (const theme of ['light', 'dark']) {
     await page.getByLabel('Color theme').selectOption(theme);
     if (capture) await page.screenshot({ path: `${capture}/diagram-${theme}.png`, fullPage: true });

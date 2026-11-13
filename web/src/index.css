@@ -231,6 +231,24 @@ button.dash-stat:hover { border-color: var(--tone); }
 
 @media (min-width: 640px) { .dash-stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (min-width: 1100px) { .dash-grid { grid-template-columns: minmax(0, 1.8fr) minmax(300px, 1fr); } }
+.topology-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: .55rem; padding: .9rem; border-bottom: 1px solid var(--ops-line); }
+.topology-workbench { display: grid; grid-template-columns: minmax(0, 1fr); }
+.topology-devices, .topology-inspector { padding: .85rem; min-width: 0; background: var(--ops-panel); }
+.topology-canvas { min-width: 0; padding: .5rem; background: radial-gradient(circle, var(--ops-line) 1px, transparent 1px) var(--ops-subtle); background-size: 18px 18px; }
+.topology-device-list { display: grid; gap: .25rem; margin-top: .65rem; max-height: 11rem; overflow: auto; }
+.topology-device-list button { display: flex; width: 100%; gap: .5rem; align-items: center; padding: .45rem; border: 1px solid transparent; border-radius: .4rem; text-align: start; font-size: .75rem; }
+.topology-device-list button:hover, .topology-device-list button[aria-pressed="true"] { border-color: var(--ops-line); background: var(--ops-subtle); }
+.topology-device-list button[aria-pressed="true"] { border-color: var(--ops-accent); }
+.topology-device-list svg { flex: none; color: var(--ops-accent); }
+.topology-device-list span { min-width: 0; overflow-wrap: anywhere; }
+.topology-device-list small { display: block; color: var(--ops-muted); }
+.topology-inspector label, .topology-inspector input, .topology-inspector select { max-width: 100%; }
+@media (min-width: 1150px) {
+  .topology-workbench { grid-template-columns: minmax(155px, 1fr) minmax(0, 4fr) minmax(190px, 1.15fr); }
+  .topology-devices { border-inline-end: 1px solid var(--ops-line); }
+  .topology-inspector { border-inline-start: 1px solid var(--ops-line); }
+  .topology-device-list { max-height: 33rem; }
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
   button.ops-button:active:enabled, button.dash-stat:active:enabled, button.ops-sign-out:active:enabled { scale: 1; }

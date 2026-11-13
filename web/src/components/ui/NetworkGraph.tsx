@@ -42,14 +42,18 @@ export function positionsFor(diagram: Diagram) {
   const groups = new Map<string, number>();
   const counts = new Map<number, number>();
   const points: Record<string, [number, number]> = {};
-  for (const node of diagram.nodes) {
+  const columns = Math.max(1, Math.ceil(Math.sqrt(diagram.nodes.length * 1.5)));
+  for (const [index, node] of diagram.nodes.entries()) {
     const group = diagram.layout.mode === 'site' ? String(node.site_id ?? 'unassigned')
       : diagram.layout.mode === 'subnet' ? node.ip?.split('.').slice(0, 3).join('.') ?? 'unassigned' : undefined;
     if (group !== undefined && !groups.has(group)) groups.set(group, groups.size);
     const level = group !== undefined ? groups.get(group)! : levels.get(node.id) ?? 0;
     const row = counts.get(level) ?? 0;
     counts.set(level, row + 1);
-    points[node.id] = diagram.layout.positions?.[node.id] ?? [level * 165 + (row % 2) * 46, row * 75];
+    const position: [number, number] = !diagram.links.length && group === undefined
+      ? [(index % columns) * 180, Math.floor(index / columns) * 100]
+      : [level * 180 + (row % 2) * 35, row * 92];
+    points[node.id] = diagram.layout.positions?.[node.id] ?? position;
   }
   return points;
 }
@@ -79,10 +83,11 @@ export function svgFor(diagram: Diagram, labels = true) {
 type GraphProps = { diagram: Diagram; height?: number; labels?: boolean; draggable?: boolean;
   onSelect?: (kind: 'node' | 'edge', id: number) => void;
   onMove?: (id: number, position: [number, number]) => void;
+  selectedNodeId?: number;
   exportGraph?: (exporter: () => string) => void;
 };
 
-export default function NetworkGraph({ diagram, height = 460, labels = true, draggable = false, onSelect, onMove, exportGraph }: GraphProps) {
+export default function NetworkGraph({ diagram, height = 460, labels = true, draggable = false, onSelect, onMove, selectedNodeId, exportGraph }: GraphProps) {
   const host = useRef<HTMLDivElement>(null);
   const chart = useRef<EChartsType>();
   const callbacks = useRef({ onSelect, onMove, exportGraph });
@@ -118,7 +123,8 @@ export default function NetworkGraph({ diagram, height = 460, labels = true, dra
   useEffect(() => {
     const points = positionsFor(diagram);
     const force = diagram.layout.mode === 'force' && !Object.keys(diagram.layout.positions ?? {}).length;
-    const text = getComputedStyle(document.documentElement).getPropertyValue('--ops-text').trim() || (theme === 'dark' ? '#eee' : '#222');
+    const themeStyle = getComputedStyle(document.documentElement);
+    const text = themeStyle.getPropertyValue('--ops-ink').trim();
     chart.current?.setOption({
       animation: false,
       tooltip: { renderMode: 'richText' },
@@ -126,11 +132,12 @@ export default function NetworkGraph({ diagram, height = 460, labels = true, dra
         id: `diagram-${diagram.id}`, type: 'graph', layout: force ? 'force' : 'none',
         force: { repulsion: 100, edgeLength: 90, layoutAnimation: false },
         roam: true, draggable, scaleLimit: { min: 0.25, max: 5 },
-        label: { show: labels, color: text, position: 'bottom', fontSize: 11 },
+        label: { show: labels, color: text, position: 'bottom', fontSize: 12, width: 145, overflow: 'truncate',
+          backgroundColor: themeStyle.getPropertyValue('--ops-panel').trim(), padding: [3, 5], borderRadius: 4 },
         emphasis: { focus: 'adjacency' },
         data: diagram.nodes.map(node => ({
           id: String(node.id), name: node.alerts ? `${node.label} (${node.alerts})` : node.label,
-          x: points[node.id][0], y: points[node.id][1], symbol: nodeIcons[node.kind] ?? 'circle', symbolSize: node.alerts ? 31 : 23,
+          x: points[node.id][0], y: points[node.id][1], symbol: nodeIcons[node.kind] ?? 'circle', symbolSize: node.alerts ? 36 : 28,
           itemStyle: { color: '#64748b', borderColor: statusColors[node.status] ?? '#94a3b8', borderWidth: 3 },
           value: `${node.kind} · ${node.status}${node.alerts ? ` · ${node.alerts} alerts` : ''}`,
         })),
@@ -148,5 +155,12 @@ export default function NetworkGraph({ diagram, height = 460, labels = true, dra
       }],
     }, { replaceMerge: ['series'] });
   }, [diagram, theme, labels, draggable]);
+  useEffect(() => {
+    chart.current?.dispatchAction({ type: 'downplay', seriesIndex: 0 });
+    if (selectedNodeId !== undefined) {
+      const dataIndex = diagram.nodes.findIndex(node => node.id === selectedNodeId);
+      if (dataIndex >= 0) chart.current?.dispatchAction({ type: 'highlight', seriesIndex: 0, dataIndex });
+    }
+  }, [diagram, selectedNodeId]);
   return <div ref={host} style={{ height }} role="img" aria-label={`Network diagram with ${diagram.nodes.length} nodes and ${diagram.links.length} links`} />;
 }

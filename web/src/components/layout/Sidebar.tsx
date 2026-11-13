@@ -36,8 +36,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       badge: activeAlertsCount > 0 ? activeAlertsCount : null,
       badgeColor: 'bg-rose-700 text-white',
     },
-    { id: 'settings', label: 'Settings', icon: SettingsIcon },
     ...(networkDiagram && user?.role === 'admin' ? [{ id: 'network-diagram', label: 'Network Diagram', icon: Network }] : []),
+    { id: 'settings', label: 'Settings', icon: SettingsIcon },
   ].filter(item => user?.role === 'admin' || ['overview', 'logs', 'alerts'].includes(item.id));
 
   return (

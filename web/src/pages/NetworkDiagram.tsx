@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { Cable, Focus, Lock, LockOpen, Network, Search, Server } from 'lucide-react';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import type { Diagram } from '../components/ui/NetworkGraph';
@@ -67,7 +68,7 @@ export default function NetworkDiagram() {
       request<Run[]>(endpoint + '/discovery', { signal: controller.signal }),
       request<Change[]>(endpoint + '/changes', { signal: controller.signal }),
     ]).then(([diagram, runItems, changeItems]) => {
-      if (!controller.signal.aborted) { setGraph(diagram); setRuns(runItems); setChanges(changeItems); }
+      if (!controller.signal.aborted) { setGraph(diagram); setRuns(runItems); setChanges(changeItems); setError(''); }
     }).catch(failure => { if (!controller.signal.aborted) setError(failure.message); });
     return () => controller.abort();
   }, [endpoint, id, refresh]);
@@ -77,20 +78,25 @@ export default function NetworkDiagram() {
       setError('');
       await request(path, { method, body: body ? JSON.stringify(body) : undefined });
       setRefresh(value => value + 1);
+      return true;
     } catch (failure) { setError((failure as Error).message); }
+    return false;
   }
 
   const activeGraph = graph?.id === id ? graph : undefined;
   const visible = activeGraph && search.trim() ? activeGraph.nodes.filter(node => node.label.toLowerCase().includes(search.trim().toLowerCase())) : activeGraph?.nodes;
+  // Keep the graph stable while the operator is moving nodes. Refresh data once the layout is locked.
+  const editingGraph = useRef<Diagram>();
+  useEffect(() => { if (locked) editingGraph.current = undefined; }, [locked]);
+  const canvasGraph = !locked && editingGraph.current?.id === id ? editingGraph.current : activeGraph;
 
   return <section className="space-y-4">
-    <h1 className="ops-heading">Network Diagram <Badge status="info">Beta</Badge></h1>
-    <p className="ops-muted text-sm">The automatic map uses saved SNMPv3 checks on permitted devices and refreshes in the background.</p>
+    <h1 className="ops-heading">Network Diagram</h1>
     {error && <p className="ops-notice" role="alert">{error}</p>}
     <Card><div className="flex flex-wrap items-end gap-3">
       <label className="text-sm">Diagram<select className="dash-select block" value={id ?? ''} onChange={event => {
         choseDiagram.current = true;
-        setId(Number(event.target.value)); setPositions({}); setSelection(undefined); setSearch('');
+        setId(Number(event.target.value)); setPositions({}); setSelection(undefined); setSearch(''); setLocked(true);
       }}><option value="" disabled>Choose a diagram</option>{diagrams.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <form className="flex items-end gap-2" onSubmit={async event => {
         event.preventDefault();
@@ -107,7 +113,8 @@ export default function NetworkDiagram() {
     {!diagrams.some(item => item.automatic) && <p className="ops-muted text-sm">
       An automatic map appears after ZadDesh finds an enabled device check with a stored SNMPv3 credential and a permitted IP.
     </p>}
-    {id && <Card title="Discovery">
+    {id && <details className="dash-panel p-3"><summary className="cursor-pointer font-semibold text-sm">SNMPv3 discovery</summary>
+      <div className="pt-3">
       {activeGraph?.automatic && <p className="mb-3 text-sm ops-muted">Saved SNMPv3 checks are queued automatically. Links appear when devices report LLDP or CDP neighbors.</p>}
       <div className="flex flex-wrap items-end gap-3">
         <label className="text-sm">SNMPv3 seed checks<select className="dash-select block" multiple size={Math.min(5, Math.max(2, checks.length))}
@@ -118,16 +125,28 @@ export default function NetworkDiagram() {
       </div>
       {!checks.length && <p className="ops-muted text-sm">Provision an enabled device check with stored SNMPv3 credentials first.</p>}
       {runs.map(run => <p key={run.id} className="mt-2 text-sm"><Badge status={run.status} /> {run.device}{run.message ? ` · ${run.message}` : ''}</p>)}
-    </Card>}
-    {activeGraph && <Card title={activeGraph.name}>
-      <div className="flex flex-wrap items-end gap-2">
+      </div>
+    </details>}
+    {activeGraph && <section className="dash-panel" aria-label="Topology workspace">
+      <div className="topology-toolbar">
+        <div className="min-w-0 mr-auto"><h2 className="flex items-center gap-2 font-semibold"><Network size={17} aria-hidden="true" />{activeGraph.name}</h2>
+          <p className="ops-muted text-xs mt-1">{activeGraph.nodes.length} devices · {activeGraph.links.length} links</p></div>
         <label className="text-xs">Layout<select className="dash-select block" value={activeGraph.layout.mode ?? 'hierarchical'} onChange={e => {
           setPositions({}); void mutate(endpoint, 'PATCH', { layout: e.target.value, positions: {} });
         }}>{layouts.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-        <button className="ops-button" onClick={() => setLocked(!locked)}>{locked ? 'Unlock layout' : 'Lock layout'}</button>
+        <button className="ops-button" onClick={() => {
+          if (locked) editingGraph.current = activeGraph;
+          if (!locked && Object.keys(positions).length && !window.confirm('Discard unsaved node positions?')) return;
+          if (!locked) setPositions({});
+          setLocked(!locked);
+        }}>{locked ? <Lock size={14} /> : <LockOpen size={14} />}{locked ? 'Unlock layout' : 'Lock layout'}</button>
         <button className="ops-button" disabled={!Object.keys(positions).length}
-          onClick={() => void mutate(endpoint, 'PATCH', { positions: { ...activeGraph.layout.positions, ...positions } })}>Save layout</button>
-        <button className="ops-button" onClick={() => setFit(value => value + 1)}>Fit to screen</button>
+          onClick={async () => {
+            if (await mutate(endpoint, 'PATCH', { positions: { ...activeGraph.layout.positions, ...positions } })) {
+              setPositions({}); setLocked(true);
+            }
+          }}>Save layout</button>
+        <button className="ops-button" onClick={() => setFit(value => value + 1)}><Focus size={14} />Fit to screen</button>
         <button className="ops-button" onClick={() => void mutate(endpoint, 'PATCH', { published: !activeGraph.published })}>{activeGraph.published ? 'Unpublish' : 'Publish'}</button>
         <button className="ops-button" onClick={() => download('network-diagram.json', new Blob([JSON.stringify(activeGraph, null, 2)], { type: 'application/json' }))}>JSON</button>
         <button className="ops-button" disabled={!activeGraph.nodes.length} onClick={async () => {
@@ -136,17 +155,29 @@ export default function NetworkDiagram() {
         }}>SVG</button>
         <button className="ops-button" disabled={!activeGraph.nodes.length} onClick={() => { if (png.current) download('network-diagram.png', png.current()); }}>PNG</button>
       </div>
+      <div className="topology-workbench">
+        <aside className="topology-devices" aria-label="Diagram devices">
+          <label className="block text-sm font-semibold" htmlFor="topology-find">Devices</label>
+          <div className="relative mt-2"><Search size={14} className="absolute left-2 top-2.5 ops-muted" aria-hidden="true" />
+            <input id="topology-find" className="dash-select w-full pl-7" placeholder="Find a node" value={search} onChange={event => setSearch(event.target.value)} />
+          </div>
+          <ul className="topology-device-list">
+            {visible?.map(node => <li key={node.id}><button type="button" aria-pressed={selectedNode?.id === node.id} onClick={() => setSelection({ kind: 'node', id: node.id })}>
+              <Server size={15} aria-hidden="true" /><span><strong>{node.label}</strong><small>{node.kind} · {node.status}</small></span></button></li>)}
+          </ul>
+          {!visible?.length && <p className="ops-muted text-xs mt-3">{search ? 'No matching devices' : 'No devices on this diagram'}</p>}
+        </aside>
+        <div className="topology-canvas">
       {activeGraph.nodes.length ? <Suspense fallback={<p role="status">Loading diagram…</p>}>
-        <Graph key={`${id}:${fit}`} diagram={activeGraph} draggable={!locked} onSelect={(kind, item) => setSelection({ kind, id: item })}
+        <Graph key={`${id}:${fit}`} diagram={canvasGraph ?? activeGraph} draggable={!locked} onSelect={(kind, item) => setSelection({ kind, id: item })}
           onMove={!locked ? (node, point) => setPositions(previous => ({ ...previous, [node]: point })) : undefined}
-          exportGraph={exporter => { png.current = exporter; }} />
+          selectedNodeId={selectedNode?.id} height={610} exportGraph={exporter => { png.current = exporter; }} />
       </Suspense> : <p className="ops-empty">{activeGraph.automatic
         ? 'Waiting for successful SNMPv3 discovery results.'
         : 'Run discovery or add a node to populate this diagram.'}</p>}
-      <label className="text-sm">Find a node<input className="dash-select ml-2" value={search} onChange={event => setSearch(event.target.value)} /></label>
-      <div className="mt-2 flex max-h-28 flex-wrap gap-2 overflow-auto">
-        {visible?.map(node => <button className="ops-button" key={node.id} onClick={() => setSelection({ kind: 'node', id: node.id })}>{node.label}</button>)}
-      </div>
+        </div>
+        <aside className="topology-inspector" aria-label="Topology inspector">
+          <h3 className="flex items-center gap-2 font-semibold text-sm"><Cable size={16} aria-hidden="true" />Inspector</h3>
       {selectedNode && <div className="mt-4 space-y-2" aria-label="Node details">
         <h3 className="font-semibold">{selectedNode.label} · {selectedNode.kind}</h3>
         <p><Badge status={selectedNode.status} /> {selectedNode.ip} · {selectedNode.alerts} active alerts</p>
@@ -160,8 +191,8 @@ export default function NetworkDiagram() {
           {selectedLink.utilization != null && ` · ${selectedLink.utilization.toFixed(1)}% utilization`}</p>
         <button className="ops-button" onClick={() => void mutate(`${endpoint}/links/${selectedLink.id}`, 'DELETE')}>Remove link</button>
       </div>}
-      <details className="mt-4"><summary className="cursor-pointer">Manual edits</summary>
-        <form className="my-2 flex flex-wrap items-end gap-2" key={selectedNode?.id ?? 'new'} onSubmit={event => {
+      <details className="mt-4" open={Boolean(selectedNode || selectedLink)}><summary className="cursor-pointer text-sm font-semibold">Manual edits</summary>
+        <form className="my-2 flex flex-wrap items-end gap-2" key={`node-${selectedNode?.id ?? 'new'}`} onSubmit={event => {
           event.preventDefault();
           const data = new FormData(event.currentTarget);
           void mutate(`${endpoint}/nodes/${selectedNode?.id ?? 0}`, 'PUT', { label: data.get('label'), kind: data.get('kind') });
@@ -172,7 +203,7 @@ export default function NetworkDiagram() {
           <button type="submit" className="ops-button">{selectedNode ? 'Save node' : 'Add node'}</button>
           {selectedNode && <button type="button" className="ops-button" onClick={() => void mutate(`${endpoint}/nodes/${selectedNode.id}`, 'DELETE')}>Remove node</button>}
         </form>
-        {activeGraph.nodes.length > 1 && <form className="flex flex-wrap items-end gap-2" key={selectedLink?.id ?? 'new'} onSubmit={event => {
+        {activeGraph.nodes.length > 1 && <form className="flex flex-wrap items-end gap-2" key={`link-${selectedLink?.id ?? 'new'}`} onSubmit={event => {
           event.preventDefault();
           const data = new FormData(event.currentTarget);
           void mutate(`${endpoint}/links/${selectedLink?.id ?? 0}`, 'PUT', {
@@ -188,7 +219,9 @@ export default function NetworkDiagram() {
           <button type="submit" className="ops-button">{selectedLink ? 'Save link' : 'Add link'}</button>
         </form>}
       </details>
-    </Card>}
+        </aside>
+      </div>
+    </section>}
     {id && <Card title="Changes detected">
       {!changes.length && <p className="ops-muted text-sm">No changes recorded.</p>}
       {changes.map(change => <div className="flex flex-wrap items-center gap-2 py-1 text-sm" key={change.id}>
