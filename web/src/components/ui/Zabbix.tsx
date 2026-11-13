@@ -108,7 +108,13 @@ export function ZabbixSettings() {
     </form>
     <p className="mt-3 text-sm ops-muted">Use a token with read access to the required Zabbix host groups and the host, item and problem API methods.</p>
     {url.trim().toLowerCase().startsWith('http://') && <p className="mt-2 text-sm ops-muted">HTTP sends the token unencrypted between ZadDesh and Zabbix.</p>}
-    {message && <p role="status" className="mt-2 text-sm">{message}</p>}
+    {message && <p role="status" className="ops-success mt-2 text-sm">
+      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="9" pathLength="1" />
+        <path d="m8 12 2.5 2.5 5.5-5.5" pathLength="1" />
+      </svg>
+      <span>{message}</span>
+    </p>}
     {error && <p role="alert" className="mt-2 ops-notice">{error}</p>}
   </Card>;
 }

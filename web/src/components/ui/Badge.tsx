@@ -26,11 +26,12 @@ export const Badge: React.FC<BadgeProps> = ({ status, children, className = '' }
       className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border uppercase tracking-wider ${colorClasses} ${className}`}
     >
       <span
+        aria-hidden="true"
         className={`w-1.5 h-1.5 mr-1.5 rounded-full ${
           ['up', 'ok', 'online', 'healthy'].includes(s)
-            ? 'bg-emerald-500 animate-pulse'
+            ? 'bg-emerald-500'
             : ['down', 'critical'].includes(s)
-            ? 'bg-rose-500 animate-ping'
+            ? 'bg-rose-500'
             : ['warning', 'degraded'].includes(s)
             ? 'bg-amber-500'
             : 'bg-slate-400'

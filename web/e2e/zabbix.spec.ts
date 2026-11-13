@@ -75,7 +75,9 @@ test('Zabbix settings and read-only device view', async ({ page, request }) => {
   await expect(tokenField).toHaveAttribute('type', 'password');
   await tokenField.fill(token);
   await page.getByRole('button', { name: 'Test and save' }).click();
-  await expect(page.getByText('Zabbix accepted the token and allowed host, item and problem reads.')).toBeVisible();
+  const confirmation = page.getByRole('status').filter({ hasText: 'Zabbix accepted the token' });
+  await expect(confirmation).toHaveText('Zabbix accepted the token and allowed host, item and problem reads.');
+  await expect(confirmation.locator('svg')).toHaveAttribute('aria-hidden', 'true');
   await expect(tokenField).toHaveValue('');
 
   await page.getByRole('button', { name: 'Devices', exact: true }).click();

@@ -126,8 +126,10 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 768, height: 1024 
       status = 503;
       const failureStart = performance.now();
       await sample();
-      await expect(page.getByRole('heading', { name: '1 needs attention' })).toBeVisible({ timeout: 4500 });
       await expect(latency.getByRole('list', { name: 'Devices with outages' })).toContainText(name);
+      // Fleet health polls independently. Exercise the existing manual refresh after the live chart updates.
+      await page.getByRole('button', { name: 'Refresh dashboard' }).click();
+      await expect(page.getByRole('heading', { name: '1 needs attention' })).toBeVisible();
       await expect(latency.getByText('× Failed probes', { exact: true })).toBeVisible();
       const failureCsv = page.waitForEvent('download');
       await latency.getByRole('button', { name: /Export .* CSV/ }).click();
@@ -135,8 +137,15 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 768, height: 1024 
       const events = page.getByRole('region', { name: 'Recent activity' });
       const event = events.locator('details').filter({ hasText: `Availability: ${check.name}` }).filter({ has: page.getByText('Probe down', { exact: true }) });
       await expect(event.getByText('Probe failed', { exact: true })).toBeHidden();
-      await event.getByText('Probe down', { exact: true }).click();
+      const eventSummary = event.locator('summary');
+      await eventSummary.focus();
+      await eventSummary.press('Enter');
       await expect(event.getByText('Probe failed', { exact: true })).toBeVisible();
+      await expect(eventSummary).toBeFocused();
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await eventSummary.press('Enter');
+      await expect(event.getByText('Probe failed', { exact: true })).toBeHidden();
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
       await page.getByRole('button', { name: /Alerts & Events/ }).click();
       const alertTitle = page.getByText('Probe down', { exact: true });
       await expect(alertTitle).toBeVisible();

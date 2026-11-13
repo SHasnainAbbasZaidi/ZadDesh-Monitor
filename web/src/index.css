@@ -40,6 +40,12 @@
 ::-webkit-scrollbar-thumb { background: var(--ops-line); border-radius: 999px; }
 .ops-shell { background: var(--ops-bg); color: var(--ops-ink); }
 .ops-chrome { background: var(--ops-panel); border-color: var(--ops-line); }
+.ops-header-search { background: var(--ops-subtle); border: 1px solid var(--ops-line); color: var(--ops-ink); }
+.ops-header-search::placeholder { color: var(--ops-muted); }
+.ops-account-divider { background: var(--ops-line); }
+.ops-account-initials { background: var(--ops-subtle); border: 1px solid var(--ops-line); color: var(--ops-ink); }
+.ops-sign-out { color: var(--ops-muted); }
+.ops-sign-out:hover { color: var(--ops-down); background: var(--ops-subtle); }
 .ops-nav-link { color: var(--ops-muted); border: 1px solid transparent; }
 .ops-nav-link:hover { background: var(--ops-subtle); color: var(--ops-ink); }
 .ops-nav-link[aria-current="page"] {
@@ -59,6 +65,15 @@
 }
 .ops-button:hover:not(:disabled), .dash-select:hover:not(:disabled) { border-color: var(--ops-accent); color: var(--ops-accent); }
 .ops-button:disabled, .dash-select:disabled { opacity: .55; cursor: not-allowed; }
+button.ops-button, button.dash-stat, button.ops-sign-out {
+  transition: scale .24s cubic-bezier(.2,.8,.35,1.35), color .15s ease, border-color .15s ease, background-color .15s ease;
+}
+button.ops-button:active:enabled, button.dash-stat:active:enabled, button.ops-sign-out:active:enabled {
+  scale: .95;
+  transition-duration: .08s;
+}
+.ops-success { display: flex; align-items: flex-start; gap: .5rem; }
+.ops-success svg { flex: none; color: var(--ops-up); }
 .ops-notice {
   display: flex; flex-wrap: wrap; align-items: center; gap: .7rem; font-size: .82rem;
   border: 1px solid var(--ops-line); border-radius: .75rem; padding: .75rem; background: var(--ops-panel);
@@ -102,6 +117,7 @@
   color: var(--tone); background: color-mix(in srgb, var(--tone) 12%, var(--ops-panel)); border-radius: .48rem;
 }
 .dash-stat > strong { font-size: 1.8rem; font-weight: 720; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.05em; }
+.ops-count-digits { display: inline-flex; align-items: baseline; }
 .dash-stat-foot { justify-content: space-between; color: var(--ops-muted); font-size: .7rem; }
 .dash-stat-foot svg { flex: none; }
 .dash-grid, .dash-side-stack { display: grid; gap: .9rem; min-width: 0; align-content: start; }
@@ -172,13 +188,30 @@
 .dash-feed p { color: var(--ops-muted); margin-top: .2rem; font-size: .72rem; }
 .entry-details > summary { display: flex; align-items: start; gap: .35rem; cursor: pointer; list-style: none; overflow-wrap: anywhere; }
 .entry-details > summary::-webkit-details-marker { display: none; }
-.entry-details > summary svg { flex: none; margin-top: .15rem; }
+.entry-details > summary svg { flex: none; margin-top: .15rem; transition: transform .2s ease-out; }
 .entry-details[open] > summary svg { transform: rotate(90deg); }
 .entry-details > summary { padding: .3rem 0; }
 .entry-detail-body { margin: .45rem 0 .2rem 1.25rem; color: inherit; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .ops-success circle, .ops-success path { stroke-dasharray: 1; animation: ops-draw-stroke .26s ease-out backwards; }
+  .ops-success path { animation-duration: .21s; animation-delay: .26s; }
+  @keyframes ops-draw-stroke { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+
+  @supports (interpolate-size: allow-keywords) and selector(details::details-content) {
+    .entry-details { interpolate-size: allow-keywords; }
+    .entry-details::details-content {
+      block-size: 0;
+      overflow: clip;
+      transition: block-size .35s ease-out, content-visibility .35s allow-discrete;
+    }
+    .entry-details[open]::details-content { block-size: auto; }
+  }
+}
 
 @media (min-width: 640px) { .dash-stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (min-width: 1100px) { .dash-grid { grid-template-columns: minmax(0, 1.8fr) minmax(300px, 1fr); } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  button.ops-button:active:enabled, button.dash-stat:active:enabled, button.ops-sign-out:active:enabled { scale: 1; }
 }

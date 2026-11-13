@@ -3,6 +3,7 @@ import { Activity, ArrowRight, Bell, CircleCheck, CircleHelp, CircleX, Clock3, N
 import { Badge } from '../components/ui/Badge';
 import { EntryDetails, incidentTitle } from '../components/ui/EntryDetails';
 import { OverviewLatency } from '../components/ui/OverviewLatency';
+import { RollingCount } from '../components/ui/RollingCount';
 import { api, request } from '../services/api';
 import { useLiveUpdates } from '../services/live';
 import type { DeviceStats, FleetOverview, IncidentPreviewSummary, Site, SystemEvent } from '../types';
@@ -172,7 +173,7 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
           const Item = action ? 'button' : 'div';
           return <Item type={action ? 'button' : undefined} className="dash-stat" data-tone={tone} key={label} onClick={action}>
             <span className="dash-stat-label"><span className="dash-stat-icon"><Icon size={16} /></span>{label}</span>
-            <strong>{value?.toLocaleString() ?? '—'}</strong>
+            <RollingCount value={value} />
             <span className="dash-stat-foot">{hint}{action && <ArrowRight size={14} aria-hidden="true" />}</span>
           </Item>;
         })}
