@@ -115,6 +115,15 @@ def test_metric_ingest_and_query(client, admin_headers, monkeypatch):
     assert len(rtt_series["points"]) == 1
     assert rtt_series["points"][0]["value"] == 4.25
 
+    # Cross the SQLite insert chunk boundary with a duplicate in a later chunk.
+    original = batch["points"][1]
+    extra = [{**original, "timestamp": (now + datetime.timedelta(milliseconds=i)).isoformat()}
+             for i in range(1, 251)]
+    response = client.post("/api/v1/metrics/ingest", headers=collector_headers,
+                           json={"points": extra + [extra[0], original]})
+    assert response.status_code == 202
+    assert response.json() == {"ingested": 250, "duplicates": 2, "status": "success"}
+
 
 def test_availability_uses_assertion_and_old_samples_cannot_reopen_incident(client, admin_headers, monkeypatch):
     token = secrets.token_hex(32)

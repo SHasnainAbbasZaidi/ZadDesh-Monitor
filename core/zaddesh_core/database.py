@@ -22,6 +22,10 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
     if settings.database.url.startswith("sqlite"):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute(f"PRAGMA synchronous={settings.database.sqlite_synchronous}")
+        cursor.execute(f"PRAGMA cache_size=-{settings.database.sqlite_cache_kib}")
+        if settings.database.sqlite_synchronous == "NORMAL":
+            cursor.execute("PRAGMA wal_autocheckpoint=8192")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA busy_timeout=5000")
         cursor.close()

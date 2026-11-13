@@ -3,6 +3,8 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import logging
+import time
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, aliased
@@ -15,7 +17,7 @@ from zaddesh_core.models.metrics import MetricRaw
 from zaddesh_core.models.infrastructure import Collector, Device
 from zaddesh_core.models.alerts import Alert, Event
 from zaddesh_core.config import settings
-from zaddesh_core.incidents import record_availability
+from zaddesh_core.incidents import availability_context, record_availability
 from zaddesh_core.models.checks import Check, CheckState
 from zaddesh_core.models.auth import User
 from zaddesh_core.schemas.metric import (
@@ -33,6 +35,7 @@ from zaddesh_core.api.deps import get_current_user, require_role, verify_collect
 from zaddesh_core.api.v1.stream import notify_change
 
 router = APIRouter(prefix="/metrics", tags=["Metrics & Ingestion"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/ingest", status_code=status.HTTP_202_ACCEPTED)
@@ -51,6 +54,7 @@ def ingest_metrics(
         raise HTTPException(413, "Collector batch limit exceeded")
     if not payload.points:
         return {"ingested": 0, "status": "empty"}
+    started = time.monotonic()
 
     ids = {point.device_id for point in payload.points}
     devices = {row.id: row for row in db.query(Device).filter(Device.id.in_(ids)).all()}
@@ -90,17 +94,24 @@ def ingest_metrics(
     dialect = db.get_bind().dialect.name
     if dialect not in {"sqlite", "postgresql"}:
         raise HTTPException(501, "Ingestion requires SQLite or PostgreSQL")
-    insert = sqlite_insert if dialect == "sqlite" else pg_insert
-    inserted = db.connection().execute(
-        insert(MetricRaw).on_conflict_do_nothing(index_elements=["fingerprint"]), records,
-    ).rowcount
+    conn = db.connection()
+    if dialect == "sqlite":
+        # Stay below even the legacy 999-variable SQLite limit and avoid one execution per point.
+        inserted = sum(conn.execute(sqlite_insert(MetricRaw).values(records[offset:offset + 125])
+                                    .on_conflict_do_nothing(index_elements=["fingerprint"])).rowcount
+                       for offset in range(0, len(records), 125))
+    else:
+        inserted = conn.execute(pg_insert(MetricRaw).on_conflict_do_nothing(
+            index_elements=["fingerprint"]), records).rowcount
+    inserted_at = time.monotonic()
     for device in devices.values():
         device.last_seen = now
 
     states = db.query(CheckState).filter(CheckState.check_id.in_(observations)).order_by(
         CheckState.check_id
     ).with_for_update().all()
-    transition_ids = [
+    incidents_enabled = settings.features.incident_workspace
+    transition_ids = [] if incidents_enabled else [
         state.check_id for state in states
         if (state.last_check_time is None or observations[state.check_id][0] > state.last_check_time)
         and ((not observations[state.check_id][1] and state.current_status != "critical")
@@ -113,17 +124,27 @@ def ingest_metrics(
             Alert.status.in_(("active", "acknowledged")),
         ).all()
     } if transition_ids else {}
+    incident_context = None
+    if incident_samples and states:
+        pending = {state.check_id: [at for at in incident_samples[state.check_id]
+                                   if state.last_check_time is None or at > state.last_check_time]
+                   for state in states}
+        timestamps = [at for times in pending.values() for at in times]
+        if timestamps:
+            incident_context = availability_context(db, [checks[check_id] for check_id, times in pending.items() if times],
+                                                   min(timestamps), max(timestamps))
     touched = set()
     for state in states:
         timestamp, ok = observations[state.check_id]
         if state.last_check_time is not None and timestamp <= state.last_check_time:
             continue  # A late sample may be queried but must not rewind current health.
         check = checks[state.check_id]
-        if settings.features.incident_workspace:
+        if incident_context is not None:
             previous_status = state.current_status
             for at, available in sorted(incident_samples[state.check_id].items()):
                 if state.last_check_time is None or at > state.last_check_time:
-                    record_availability(db, check, devices[check.device_id], previous_status, available, at)
+                    record_availability(db, check, devices[check.device_id], previous_status, available, at,
+                                        *incident_context)
                     previous_status = "ok" if available else "critical"
                     ok = available
         touched.add(check.device_id)
@@ -135,7 +156,7 @@ def ingest_metrics(
             continue
         state.current_status = new_status
         state.last_change_time = timestamp
-        if settings.features.incident_workspace:
+        if incidents_enabled:
             continue
         title = f"Availability: {check.name}"
         open_alert = open_alerts.get((check.id, title))
@@ -166,7 +187,12 @@ def ingest_metrics(
         db.query(Event).filter(Event.timestamp < now - datetime.timedelta(
             days=settings.features.event_retention_days,
         )).delete()
+    before_commit = time.monotonic()
     db.commit()
+    completed = time.monotonic()
+    if completed - started > 5:
+        logger.warning("Slow metrics batch (%d points): prepare/insert %.2fs, state updates %.2fs, commit %.2fs",
+                       len(records), inserted_at - started, before_commit - inserted_at, completed - before_commit)
     notify_change()
     return {"ingested": inserted, "duplicates": len(records) - inserted, "status": "success"}
 

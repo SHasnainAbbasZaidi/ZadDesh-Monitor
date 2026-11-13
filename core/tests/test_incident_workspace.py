@@ -3,7 +3,7 @@ from secrets import token_hex
 
 from zaddesh_core.config import settings
 from zaddesh_core.incidents import redact, utc_now
-from zaddesh_core.models.alerts import Alert, Event
+from zaddesh_core.models.alerts import Alert, Event, MaintenanceWindow
 from zaddesh_core.models.checks import Check
 from zaddesh_core.models.infrastructure import Device
 
@@ -54,6 +54,34 @@ def test_redacts_structured_and_text_secrets():
     value = redact({"authKey": "sensitive", "message": "password=example community=public Authorization: Bearer example-token"})
     assert value["authKey"] == "[redacted]"
     assert "example" not in value["message"] and "public" not in value["message"]
+
+
+def test_repeated_probe_failures_keep_counts_and_suppression_transitions(
+    client, db_session, admin_headers, monkeypatch,
+):
+    monkeypatch.setattr(settings.features, "incident_workspace", True)
+    token = token_hex(32)
+    monkeypatch.setattr(settings.collector, "shared_secret", token)
+    device = client.post("/api/v1/devices", headers=admin_headers, json={
+        "name": "Repeated failure", "ip": "192.0.2.21", "initial_check_types": ["icmp"],
+    }).json()["id"]
+    check = client.get(f"/api/v1/checks?device_id={device}", headers=admin_headers).json()[0]["id"]
+    start = utc_now() - timedelta(minutes=2)
+    db_session.add(MaintenanceWindow(name="Maintenance", scope_type="device", scope_id=device,
+                                     start_time=start, end_time=start + timedelta(seconds=5)))
+    db_session.commit()
+    payload = {"points": [
+        {"device_id": device, "check_id": check, "metric_key": "icmp.availability", "value": 0,
+         "timestamp": (start + timedelta(seconds=index)).isoformat()}
+        for index in range(20)
+    ]}
+    for _ in range(2):
+        response = client.post("/api/v1/metrics/ingest", headers={"Authorization": f"Bearer {token}"}, json=payload)
+        assert response.status_code == 202
+    alert = client.get(f"/api/v1/incidents/alerts?device_id={device}", headers=admin_headers).json()["alerts"][0]
+    detail = client.get(f"/api/v1/incidents/alerts/{alert['id']}", headers=admin_headers).json()
+    assert detail["occurrences"] == 20
+    assert [entry["kind"] for entry in detail["timeline"]] == ["started", "suppressed", "unsuppressed"]
 
 
 def test_critical_categories_and_alert_cleanup(client, db_session, admin_headers, viewer_headers, monkeypatch):

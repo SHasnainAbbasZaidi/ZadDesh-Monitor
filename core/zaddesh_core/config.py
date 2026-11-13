@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import secrets
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Literal
 import yaml
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
@@ -26,6 +26,8 @@ class DatabaseConfig(BaseModel):
     echo: bool = False
     pool_size: int = 20
     max_overflow: int = 10
+    sqlite_synchronous: Literal["FULL", "NORMAL"] = "FULL"
+    sqlite_cache_kib: int = Field(default=16384, ge=2048, le=262144)
 
 
 class SecurityConfig(BaseModel):

@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from zaddesh_core.config import settings
@@ -69,10 +69,13 @@ def suppression_reason(db: Session, device: Device, at: datetime) -> str | None:
 
 def record_availability(
     db: Session, check: Check, device: Device, previous: str, ok: bool, timestamp: datetime,
+    incidents: dict[str, tuple[Incident, Alert]],
+    maintenance: dict[tuple[str, int | None], list[MaintenanceWindow]],
+    down_parents: set[int],
 ) -> None:
     key = f"availability:{device.id}:{check.id}"
-    incident = db.query(Incident).filter_by(correlation_key=key).first()
-    alert = db.get(Alert, incident.alert_id) if incident else None
+    existing = incidents.get(key)
+    incident, alert = existing if existing is not None else (None, None)
     changed = (previous != ("ok" if ok else "critical"))
     if changed:
         db.add(Event(device_id=device.id, check_id=check.id, event_type="state_change",
@@ -102,6 +105,7 @@ def record_availability(
             timeline(db, alert.id, alert.triggered_at, "started", alert.message or "Probe failed")
         else:
             incident.correlation_key = key
+        incidents[key] = (incident, alert)
     assert incident is not None
     if changed:
         cutoff = (timestamp - timedelta(minutes=10)).isoformat()
@@ -127,11 +131,34 @@ def record_availability(
         incident.acknowledged_at = None
         timeline(db, alert.id, timestamp, "reopened", "Probe failed again")
     incident.occurrence_count += 1
-    if incident.occurrence_count > 1:
-        timeline(db, alert.id, timestamp, "occurrence", "Probe failed")
-    reason = suppression_reason(db, device, timestamp)
+    scopes = [("all", None), ("device", device.id), ("site", device.site_id), ("group", device.group_id)]
+    if any(window.start_time <= timestamp < window.end_time
+           for kind, scope in scopes if kind == "all" or scope is not None
+           for window in maintenance.get((kind, scope), ())):
+        reason = "maintenance"
+    else:
+        reason = "parent down" if device.id in down_parents else None
     if (changed or incident.suppression) and not reason and not (incident.silenced_until and incident.silenced_until > timestamp):
         queue_delivery(db, alert, "opened", timestamp)
     if reason != incident.suppression:
         timeline(db, alert.id, timestamp, "suppressed" if reason else "unsuppressed", reason or "Suppression ended")
     incident.suppression = reason
+
+
+def availability_context(db: Session, checks: list[Check], start: datetime, end: datetime) -> tuple[
+    dict[str, tuple[Incident, Alert]], dict[tuple[str, int | None], list[MaintenanceWindow]], set[int],
+]:
+    keys = [f"availability:{check.device_id}:{check.id}" for check in checks]
+    incidents = {incident.correlation_key: (incident, alert) for incident, alert in db.execute(
+        select(Incident, Alert).join(Alert, Alert.id == Incident.alert_id).where(Incident.correlation_key.in_(keys))
+    )}
+    maintenance: dict[tuple[str, int | None], list[MaintenanceWindow]] = {}
+    for window in db.scalars(select(MaintenanceWindow).where(
+        MaintenanceWindow.start_time <= end, MaintenanceWindow.end_time > start,
+    )):
+        scope = None if window.scope_type == "all" else window.scope_id
+        maintenance.setdefault((window.scope_type, scope), []).append(window)
+    down_parents = set(db.scalars(select(IncidentParent.device_id).join(
+        Device, Device.id == IncidentParent.parent_id,
+    ).where(IncidentParent.device_id.in_({check.device_id for check in checks}), Device.status == "down")))
+    return incidents, maintenance, down_parents
