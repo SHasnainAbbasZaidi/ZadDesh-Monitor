@@ -40,7 +40,7 @@ pub async fn run(config: CollectorConfig) {
             continue;
         };
         let result =
-            tokio::time::timeout(Duration::from_secs(45), discover_topology(&job.task)).await;
+            tokio::time::timeout(Duration::from_secs(65), discover_topology(&job.task)).await;
         let payload = match result {
             Ok(Ok(values)) => serde_json::json!({ "lease": job.lease, "values": values }),
             Ok(Err(error)) => serde_json::json!({ "lease": job.lease, "error": error }),

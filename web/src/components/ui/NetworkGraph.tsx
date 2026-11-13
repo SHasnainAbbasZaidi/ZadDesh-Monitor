@@ -5,22 +5,26 @@ import { TooltipComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import { useTheme } from '../../context/ThemeContext';
 import { expandedLayout } from './topologyLayout';
+import { linkHealth } from './linkHealth';
 
 use([GraphChart, TooltipComponent, CanvasRenderer]);
 
-export type DiagramPort = { name: string; status: string; speed?: number | null; utilization?: number | null };
+type PortVlans = { pvid?: number | null; egress_vlans?: number[] | null; untagged_vlans?: number[] | null };
+export type DiagramPort = PortVlans & { name: string; status: string; speed?: number | null; expected_speed?: number | null; utilization?: number | null;
+  alias?: string; admin_status?: string; mtu?: number; in_errors?: number; out_errors?: number; in_discards?: number; out_discards?: number };
 export type Diagram = {
   automatic?: boolean;
   id: number; name: string; published: boolean;
   layout: { mode?: string; positions?: Record<string, [number, number]> };
   nodes: { id: number; label: string; status: string; kind: string; alerts: number; site_id?: number; ip?: string; device_id?: number; manual?: boolean; interfaces?: Record<string, DiagramPort> }[];
-  links: { id: number; source: number; target: number; source_port: string; target_port: string; method: string; confidence: string; status: string; speed?: number; utilization?: number; manual?: boolean; configured_vlans?: number[] }[];
+  links: { id: number; source: number; target: number; source_port: string; target_port: string; method: string; confidence: string; status: string; speed?: number; expected_speed?: number | null; utilization?: number; manual?: boolean; configured_vlans?: number[]; discovered_vlans?: (PortVlans & { node_id: number })[] }[];
 };
 const nodeIcons: Record<string, string> = {
   router: 'diamond', switch: 'rect', firewall: 'triangle', ap: 'pin', server: 'roundRect',
   ups: 'rect', printer: 'roundRect', internet: 'circle', unmanaged: 'circle',
 };
 const statusColors: Record<string, string> = { up: '#22c55e', down: '#ef4444', warning: '#f59e0b' };
+const linkColor = (link: Diagram['links'][number]) => statusColors[linkHealth(link).tone] ?? '#64748b';
 
 export function positionsFor(diagram: Diagram) {
   if (diagram.layout.mode === 'expanded') return { ...expandedLayout(diagram).positions, ...diagram.layout.positions };
@@ -74,7 +78,7 @@ export function svgFor(diagram: Diagram, labels = true) {
   const edges = diagram.links.map(link => {
     const a = positions[link.source];
     const b = positions[link.target];
-    return a && b ? `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="${link.status === 'down' ? '#ef4444' : '#64748b'}" stroke-width="2"${link.status === 'down' ? ' stroke-dasharray="5 4"' : ''}/>` : '';
+    return a && b ? `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="${linkColor(link)}" stroke-width="2"${link.status === 'down' ? ' stroke-dasharray="5 4"' : ''}/>` : '';
   });
   const nodes = diagram.nodes.map(node => {
     const [x, y] = positions[node.id];
@@ -146,11 +150,10 @@ export default function NetworkGraph({ diagram, height = 460, labels = true, dra
         })),
         links: diagram.links.map(link => ({
           id: String(link.id), source: String(link.source), target: String(link.target),
-          value: `${link.source_port} ↔ ${link.target_port} · ${link.method.toUpperCase()} · ${link.status}`,
+          value: `${link.source_port} ↔ ${link.target_port} · ${link.method.toUpperCase()} · ${linkHealth(link).label}`,
           label: { show: link.status === 'down', formatter: '×', color: '#ef4444' },
           lineStyle: {
-            color: link.status === 'down' ? '#ef4444' : link.utilization == null ? '#64748b'
-              : link.utilization < 50 ? '#22c55e' : link.utilization < 80 ? '#f59e0b' : '#ef4444',
+            color: linkColor(link),
             type: link.status === 'down' ? 'dashed' : 'solid',
             width: link.speed ? Math.max(2, Math.min(6, Math.log10(link.speed) - 5)) : 2,
           },

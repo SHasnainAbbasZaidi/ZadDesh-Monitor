@@ -7,7 +7,27 @@ from zaddesh_core.incidents import utc_now
 from zaddesh_core.models.infrastructure import Collector
 from zaddesh_core.models.topology import TopologyLink, TopologyNode, TopologyRun
 from zaddesh_core.security import hash_token
-from zaddesh_core.topology import link_key
+from zaddesh_core.topology import link_key, parse_interfaces
+
+
+def test_snmp_interface_speed_baseline_and_bridge_vlan_mapping():
+    at = utc_now()
+    values = {
+        "1.3.6.1.2.1.31.1.1.1.1.39": "Ethernet1/39",
+        "1.3.6.1.2.1.31.1.1.1.15.39": "1000",
+        "1.3.6.1.2.1.2.2.1.7.39": "1",
+        "1.3.6.1.2.1.2.2.1.8.39": "1",
+        "1.3.6.1.2.1.2.2.1.14.39": "2",
+        "1.3.6.1.2.1.17.1.4.1.2.2": "39",
+        "1.3.6.1.2.1.17.7.1.4.3.1.2.10": "40",
+        "1.3.6.1.2.1.17.7.1.4.3.1.2.20": "40",
+        "1.3.6.1.2.1.17.7.1.4.3.1.4.10": "40",
+        "1.3.6.1.2.1.17.7.1.4.5.1.1.2": "10",
+    }
+    port = parse_interfaces(values, {"39": {"speed": 10_000_000_000}}, at)["39"]
+    assert (port["status"], port["admin_status"], port["in_errors"]) == ("up", "up", 2)
+    assert (port["speed"], port["expected_speed"]) == (1_000_000_000, 10_000_000_000)
+    assert (port["pvid"], port["egress_vlans"], port["untagged_vlans"]) == (10, [10, 20], [10])
 
 
 def test_discovery_rbac_merge_publication_and_link_recovery(client, db_session, admin_headers, viewer_headers, monkeypatch):

@@ -254,10 +254,18 @@ const TOPOLOGY_ROOTS: &[&str] = &[
     "1.0.8802.1.1.2.1.4.2.1.3",     // LLDP remote management address index
     "1.3.6.1.4.1.9.9.23.1.2.1.1.6", // CDP remote device
     "1.3.6.1.4.1.9.9.23.1.2.1.1.7", // CDP remote port
-    "1.3.6.1.2.1.17.4.3",           // bridge forwarding database
-    "1.3.6.1.2.1.17.7.1.2.2",       // VLAN forwarding database
-    "1.3.6.1.2.1.4.22",             // ARP
-    "1.3.6.1.2.1.4.21",             // routes
+    "1.3.6.1.2.1.17.1.4.1.2",       // bridge port to ifIndex
+    "1.3.6.1.2.1.17.7.1.4.3.1.2",   // static VLAN egress port bitmap
+    "1.3.6.1.2.1.17.7.1.4.3.1.4",   // static VLAN untagged port bitmap
+    "1.3.6.1.2.1.17.7.1.4.5.1.1",   // PVID
+    "1.3.6.1.2.1.2.2.1.7",          // ifAdminStatus
+    "1.3.6.1.2.1.2.2.1.4",          // ifMtu
+    "1.3.6.1.2.1.31.1.1.1.18",      // ifAlias
+    "1.3.6.1.2.1.31.1.1.1.19",      // ifCounterDiscontinuityTime
+    "1.3.6.1.2.1.2.2.1.13",         // ifInDiscards
+    "1.3.6.1.2.1.2.2.1.14",         // ifInErrors
+    "1.3.6.1.2.1.2.2.1.19",         // ifOutDiscards
+    "1.3.6.1.2.1.2.2.1.20",         // ifOutErrors
 ];
 
 fn topology_value(value: Value<'_>) -> Option<String> {
@@ -297,11 +305,15 @@ pub async fn discover_topology(task: &CheckTask) -> Result<BTreeMap<String, Stri
         .await
         .map_err(|_| "SNMPv3 session timed out")??;
     let mut values = BTreeMap::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(55);
     for root in TOPOLOGY_ROOTS {
+        if tokio::time::Instant::now() >= deadline || values.len() >= 8000 {
+            break;
+        }
         let prefix = format!("{root}.");
         let mut current = oid(root)?;
         let mut count = 0;
-        while count < 256 && values.len() < 1600 {
+        while count < 512 && values.len() < 8000 && tokio::time::Instant::now() < deadline {
             let reply =
                 tokio::time::timeout(Duration::from_secs(2), session.getbulk(&[&current], 0, 20))
                     .await;
@@ -329,12 +341,28 @@ pub async fn discover_topology(task: &CheckTask) -> Result<BTreeMap<String, Stri
                     done = true;
                     break;
                 }
-                if let Some(value) = topology_value(value) {
+                let decoded = if matches!(
+                    *root,
+                    "1.3.6.1.2.1.17.7.1.4.3.1.2" | "1.3.6.1.2.1.17.7.1.4.3.1.4"
+                ) {
+                    match value {
+                        Value::OctetString(bytes) if bytes.len() <= 256 => Some(
+                            bytes
+                                .iter()
+                                .map(|byte| format!("{byte:02x}"))
+                                .collect::<String>(),
+                        ),
+                        _ => None,
+                    }
+                } else {
+                    topology_value(value)
+                };
+                if let Some(value) = decoded {
                     values.insert(name, value);
                 }
                 next = Some(binding.to_owned());
                 count += 1;
-                if count >= 256 || values.len() >= 1600 {
+                if count >= 512 || values.len() >= 8000 {
                     break;
                 }
             }

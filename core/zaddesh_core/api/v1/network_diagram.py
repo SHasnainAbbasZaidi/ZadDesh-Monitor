@@ -137,6 +137,12 @@ def graph(db: Session, item: TopologyDiagram):
                        "target_port": "" if MAC_ID.fullmatch(link.target_port.strip()) else link.target_port, "method": link.method,
                        "confidence": "high" if link.method in {"lldp", "cdp"} else "manual",
                        "status": link.status, "speed": link.speed, "utilization": link.utilization, "manual": link.manual,
+                       "expected_speed": max((port.get("expected_speed") or 0 for port in link.evidence.values()
+                                              if isinstance(port, dict)), default=0) or (link.speed if link.speed == 10_000_000_000 else None),
+                       "discovered_vlans": [{"node_id": canonical.get(int(key), int(key)), "pvid": port.get("pvid"),
+                                             "egress_vlans": port.get("egress_vlans"), "untagged_vlans": port.get("untagged_vlans")}
+                                            for key, port in link.evidence.items() if key.isdecimal() and isinstance(port, dict)
+                                            and (port.get("egress_vlans") is not None or port.get("pvid") is not None)],
                        "configured_vlans": link.evidence.get("configured_vlans", [])}
                       for link, source, target in links.values()]}
 
@@ -332,7 +338,7 @@ def next_job(request: Request, collector: Collector | None = Depends(verify_coll
 class JobResult(BaseModel):
     lease: str = Field(min_length=48, max_length=48)
     values: dict[Annotated[str, StringConstraints(pattern=r"^\d+(\.\d+){1,63}$", max_length=255)],
-                 Annotated[str, StringConstraints(max_length=512)]] = Field(default_factory=dict, max_length=1600)
+                 Annotated[str, StringConstraints(max_length=512)]] = Field(default_factory=dict, max_length=8000)
     error: Literal["SNMPv3 session timed out", "SNMPv3 authentication failed or system MIB did not respond",
                    "SNMPv3 agent returned no readable system data", "SNMPv3 discovery timed out",
                    "SNMP engine discovery failed", "Could not open SNMP session",

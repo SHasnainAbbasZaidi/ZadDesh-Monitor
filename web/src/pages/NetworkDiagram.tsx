@@ -5,6 +5,7 @@ import { Badge } from '../components/ui/Badge';
 import type { Diagram } from '../components/ui/NetworkGraph';
 import { ExpandedTopology } from '../components/ui/ExpandedTopology';
 import { expandedLayout } from '../components/ui/topologyLayout';
+import { linkHealth } from '../components/ui/linkHealth';
 import { api, request } from '../services/api';
 import { useAddonUpdates } from '../services/addonUpdates';
 import type { Check, Site } from '../types';
@@ -12,6 +13,10 @@ import type { Check, Site } from '../types';
 const Graph = lazy(() => import('../components/ui/NetworkGraph'));
 const layouts = [['hierarchical', 'Hierarchical'], ['force', 'Force-directed'], ['site', 'By site'], ['subnet', 'By subnet']];
 const kinds = ['router', 'switch', 'firewall', 'ap', 'server', 'ups', 'printer', 'unmanaged', 'internet'];
+function PortHealth({ port }: { port: Parameters<typeof linkHealth>[0] }) {
+  const health = linkHealth(port);
+  return <Badge status={health.tone}>{health.label}</Badge>;
+}
 type DiagramItem = Pick<Diagram, 'id' | 'name' | 'published' | 'automatic'>;
 type Run = { id: number; status: string; device: string; message?: string };
 type Change = { id: number; description: string; decision: string };
@@ -93,7 +98,7 @@ export default function NetworkDiagram() {
   const nodesById = new Map(activeGraph?.nodes.map(node => [node.id, node]));
   const groups = activeGraph ? expandedLayout(activeGraph).groupByNode : undefined;
   const intersiteLinks = activeGraph?.links.filter(link => groups?.get(link.source) !== groups?.get(link.target)
-    && (link.speed === 10_000_000_000 || !!link.configured_vlans?.length)) ?? [];
+    && (link.speed === 10_000_000_000 || link.expected_speed === 10_000_000_000 || !!link.configured_vlans?.length)) ?? [];
   const connections = selectedNode ? activeGraph?.links.flatMap(link => {
     if (link.source === selectedNode.id) return [{ link, local: link.source_port, remote: link.target_port, peer: nodesById.get(link.target) }];
     if (link.target === selectedNode.id) return [{ link, local: link.target_port, remote: link.source_port, peer: nodesById.get(link.source) }];
@@ -175,6 +180,9 @@ export default function NetworkDiagram() {
       <div className="topology-toolbar">
         <div className="min-w-0 mr-auto"><h2 className="flex items-center gap-2 font-semibold"><Network size={17} aria-hidden="true" />{activeGraph.name}</h2>
           <p className="ops-muted text-xs mt-1">{activeGraph.nodes.length} devices · {activeGraph.links.length} links</p></div>
+        <div className="flex flex-wrap gap-1" aria-label="Link status legend">
+          <Badge status="up">Online</Badge><Badge status="down">Down</Badge><Badge status="warning">Slow</Badge>
+        </div>
         <label className="text-xs">Layout<select className="dash-select block" disabled={!locked} value={expanded ? 'expanded' : activeGraph.layout.mode ?? 'hierarchical'} onChange={async e => {
           const mode = e.target.value;
           if (mode === 'expanded') setExpanded(true);
@@ -214,7 +222,7 @@ export default function NetworkDiagram() {
             <Cable size={15} aria-hidden="true" />
             <span><strong>{nodesById.get(link.source)?.label} · {link.source_port || 'Unknown port'}</strong><br />
               {nodesById.get(link.target)?.label} · {link.target_port || 'Unknown port'}</span>
-            <Badge status={link.status} />
+            <PortHealth port={link} />
           </button>
         </li>)}</ul>
       </details>}
@@ -253,23 +261,39 @@ export default function NetworkDiagram() {
           <ul className="space-y-1">{connections.map(({ link, local, remote, peer }) => <li key={link.id}>
             <button className="ops-button whitespace-normal text-left w-full" onClick={() => inspect('edge', link.id)}>
               <span className="min-w-0 break-words">{local || 'Unknown port'} ↔ {peer?.label} · {remote || 'Unknown port'}</span>
-              <Badge status={link.status} />
+              <PortHealth port={link} />
             </button>
           </li>)}</ul>
         </section>
         <details className="entry-details"><summary className="text-sm font-semibold">Discovered interfaces ({ports.length})</summary>
           {ports.length ? <ul className="divide-y divide-slate-500/25">{ports.map((port, index) => <li key={`${port.name}-${index}`} className="flex flex-wrap items-center gap-2 py-1 text-xs">
-            <strong className="break-all">{port.name}</strong><Badge status={port.status} />
+            <strong className="break-all">{port.name}</strong><PortHealth port={port} />
             {port.speed != null && <span className="ops-muted">{(port.speed / 1_000_000).toLocaleString()} Mbps</span>}
+            {linkHealth(port).tone === 'warning' && port.expected_speed && <span>Expected {port.expected_speed / 1_000_000} Mbps</span>}
             {port.utilization != null && <span className="ops-muted">{port.utilization.toFixed(1)}% utilized</span>}
+            {port.alias && <span>{port.alias}</span>}
+            {port.admin_status && <span>Admin {port.admin_status}</span>}
+            {port.mtu != null && <span>MTU {port.mtu}</span>}
+            {port.pvid != null && <span>PVID {port.pvid}</span>}
+            {port.egress_vlans?.length ? <span>Egress VLANs {port.egress_vlans.join(', ')}</span> : null}
+            {port.in_errors != null && <span>RX errors {port.in_errors.toLocaleString()}</span>}
+            {port.out_errors != null && <span>TX errors {port.out_errors.toLocaleString()}</span>}
+            {port.in_discards != null && <span>RX discards {port.in_discards.toLocaleString()}</span>}
+            {port.out_discards != null && <span>TX discards {port.out_discards.toLocaleString()}</span>}
           </li>)}</ul> : <p className="text-xs ops-muted">No SNMP interface data has been collected for this device.</p>}
         </details>
       </div>}
       {selectedLink && <div className="mt-4 space-y-2" aria-label="Link details">
         <h3 className="font-semibold">{nodesById.get(selectedLink.source)?.label} · {selectedLink.source_port || 'Unknown port'} ↔ {nodesById.get(selectedLink.target)?.label} · {selectedLink.target_port || 'Unknown port'}</h3>
-        <p><Badge status={selectedLink.status} /> {selectedLink.method.toUpperCase()} · {selectedLink.confidence} confidence
+        <p><PortHealth port={selectedLink} /> {selectedLink.method.toUpperCase()} · {selectedLink.confidence} confidence
           {selectedLink.speed != null && ` · ${selectedLink.speed.toLocaleString()} bps`}
           {selectedLink.utilization != null && ` · ${selectedLink.utilization.toFixed(1)}% utilization`}</p>
+        {selectedLink.discovered_vlans?.map(port => <p key={port.node_id} className="text-xs ops-muted">
+          <strong>{nodesById.get(port.node_id)?.label ?? 'Switch'}</strong>
+          {port.pvid != null && ` · PVID ${port.pvid}`}
+          {port.egress_vlans?.length ? ` · SNMP egress VLANs ${port.egress_vlans.join(', ')}` : ''}
+          {port.untagged_vlans?.length ? ` · Untagged ${port.untagged_vlans.join(', ')}` : ''}
+        </p>)}
         <form key={selectedLink.id} className="space-y-2" onSubmit={event => {
           event.preventDefault();
           const text = String(new FormData(event.currentTarget).get('vlans') ?? '').trim();
@@ -280,7 +304,7 @@ export default function NetworkDiagram() {
           void mutate(`${endpoint}/links/${selectedLink.id}`, 'PUT', { ...selectedLink, configured_vlans: values });
         }}>
           <p className="text-xs ops-muted">{selectedLink.configured_vlans?.length
-            ? `Recorded VLANs: ${selectedLink.configured_vlans.join(', ')}` : 'Allowed VLANs have not been verified from the switch.'}</p>
+            ? `Recorded VLANs: ${selectedLink.configured_vlans.join(', ')}` : 'No manually confirmed VLAN list.'}</p>
           <label className="block text-xs">VLAN IDs confirmed on the switch<input name="vlans" className="dash-select block w-full" defaultValue={selectedLink.configured_vlans?.join(', ')} /></label>
           <button type="submit" className="ops-button">Save VLAN record</button>
         </form>

@@ -20,6 +20,7 @@ LLDP = "1.0.8802.1.1.2.1.4.1.1"
 CDP = "1.3.6.1.4.1.9.9.23.1.2.1.1"
 IF = "1.3.6.1.2.1.2.2.1"
 IFX = "1.3.6.1.2.1.31.1.1.1"
+QBRIDGE = "1.3.6.1.2.1.17.7.1.4"
 MAC_ID = re.compile(r"(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}|(?:[0-9a-f]{4}\.){2}[0-9a-f]{4}|[0-9a-f]{12}", re.I)
 
 
@@ -55,6 +56,23 @@ def change(db: Session, diagram_id: int, kind: str, description: str) -> None:
     db.add(TopologyChange(diagram_id=diagram_id, kind=kind, description=redact(description[:512]), created_at=utc_now()))
 
 
+def vlan_ports(data: dict[str, str], oid: str) -> dict[str, list[int]]:
+    result: dict[str, list[int]] = {}
+    for key, encoded in column(data, oid).items():
+        vlan = number(key)
+        if vlan is None or not 1 <= vlan <= 4094:
+            continue
+        try:
+            bitmap = bytes.fromhex(encoded)
+        except ValueError:
+            continue
+        for offset, byte in enumerate(bitmap):
+            for bit in range(8):
+                if byte & (128 >> bit):
+                    result.setdefault(str(offset * 8 + bit + 1), []).append(vlan)
+    return result
+
+
 def parse_interfaces(data: dict[str, str], prior: dict[str, Any], now: datetime) -> dict[str, Any]:
     names = column(data, IF + ".2") | column(data, IFX + ".1")
     status = column(data, IF + ".8")
@@ -62,19 +80,38 @@ def parse_interfaces(data: dict[str, str], prior: dict[str, Any], now: datetime)
     high_speed = column(data, IFX + ".15")
     incoming = column(data, IFX + ".6")
     outgoing = column(data, IFX + ".10")
+    admin = column(data, IF + ".7")
+    aliases = column(data, IFX + ".18")
+    discontinuities = column(data, IFX + ".19")
+    counters = {name: column(data, IF + f".{oid}") for name, oid in
+                (("mtu", 4), ("in_discards", 13), ("in_errors", 14), ("out_discards", 19), ("out_errors", 20))}
+    bridge = {index: port for port, index in column(data, "1.3.6.1.2.1.17.1.4.1.2").items()}
+    pvid = column(data, QBRIDGE + ".5.1.1")
+    egress = vlan_ports(data, QBRIDGE + ".3.1.2")
+    untagged = vlan_ports(data, QBRIDGE + ".3.1.4")
     result: dict[str, Any] = {}
     for index, name in names.items():
         rate = (number(high_speed.get(index)) or 0) * 1_000_000 or number(speed.get(index))
         rx = number(incoming.get(index))
         tx = number(outgoing.get(index))
         previous = prior.get(index)
+        discontinuity = discontinuities.get(index)
         utilization = None
-        if previous and rate and rx is not None and tx is not None and previous.get("rx") is not None and previous.get("tx") is not None:
+        if previous and previous.get("discontinuity") == discontinuity and rate and rx is not None and tx is not None and previous.get("rx") is not None and previous.get("tx") is not None:
             seconds = (now - datetime.fromisoformat(previous["at"])).total_seconds()
             if seconds > 0 and rx >= previous["rx"] and tx >= previous["tx"]:
                 utilization = min(100.0, 800 * max(rx - previous["rx"], tx - previous["tx"]) / (rate * seconds))
-        result[index] = {"name": name, "status": {"1": "up", "2": "down"}.get(status.get(index, ""), "unknown"),
-                         "speed": rate, "rx": rx, "tx": tx, "utilization": utilization, "at": now.isoformat()}
+        operational = {"1": "up", "2": "down", "6": "down", "7": "down"}.get(status.get(index, ""), "unknown")
+        port = bridge.get(index, "")
+        previous_speed = (previous.get("expected_speed") or previous.get("speed") or 0) if previous else 0
+        expected = max(previous_speed, rate or 0) or None
+        result[index] = {"name": name, "alias": aliases.get(index), "status": operational,
+                         "admin_status": {"1": "up", "2": "down", "3": "testing"}.get(admin.get(index, "")),
+                         "speed": rate, "expected_speed": expected, "rx": rx, "tx": tx, "utilization": utilization,
+                         "discontinuity": discontinuity, "pvid": number(pvid.get(port)),
+                         "egress_vlans": sorted(egress[port]) if port in egress else None,
+                         "untagged_vlans": sorted(untagged[port]) if port in untagged else None,
+                         "at": now.isoformat(), **{key: number(values.get(index)) for key, values in counters.items()}}
     return result
 
 
@@ -209,7 +246,8 @@ def merge_observation(db: Session, diagram_id: int, device: Device, data: dict[s
         if previous.get("present", True) and not present:
             change(db, diagram_id, "missing_link", f"{source.label} {port} no longer advertises this neighbor")
         evidence = {**link.evidence, str(source.id): {
-            **{key: interface.get(key) for key in ("status", "speed", "utilization")}, "present": present,
+            **{key: interface.get(key) for key in ("status", "speed", "utilization", "expected_speed", "pvid", "egress_vlans", "untagged_vlans")},
+            "present": present,
         }}
         old_status = link.status
         readings = [item for item in evidence.values() if isinstance(item, dict)]
