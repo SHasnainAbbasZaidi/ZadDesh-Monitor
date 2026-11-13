@@ -191,7 +191,7 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
           </div>
         </section>
 
-        <section className="dash-panel" aria-labelledby="devices-title">
+        <section className="dash-panel self-start" aria-labelledby="devices-title">
           <header className="dash-panel-head">
             <div><h2 id="devices-title"><Server size={16} /> Device inventory</h2>
               <p>Last reported device status by site</p></div>

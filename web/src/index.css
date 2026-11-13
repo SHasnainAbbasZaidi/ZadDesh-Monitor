@@ -187,7 +187,7 @@ button.dash-stat:hover { border-color: var(--tone); }
 .dash-fleet-foot { border-top: 1px solid var(--ops-line); margin-top: .9rem; padding-top: .75rem; }
 .dash-fleet-foot h2 { font-weight: 680; font-size: .88rem; }
 .dash-fleet-foot p { color: var(--ops-muted); font-size: .72rem; margin-top: .25rem; }
-.dash-table-scroll { overflow: auto; max-height: 24rem; border: 1px solid var(--ops-line); border-radius: .6rem; }
+.dash-table-scroll { overflow-x: auto; border: 1px solid var(--ops-line); border-radius: .6rem; }
 .dash-table { width: 100%; border-collapse: collapse; text-align: left; font-size: .76rem; }
 .dash-table th { background: var(--ops-subtle); color: var(--ops-muted); font-weight: 650; position: sticky; top: 0; }
 .dash-table th, .dash-table td { padding: .55rem .65rem; border-bottom: 1px solid var(--ops-line); }
