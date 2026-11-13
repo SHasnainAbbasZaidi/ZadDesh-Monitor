@@ -20,6 +20,13 @@ LLDP = "1.0.8802.1.1.2.1.4.1.1"
 CDP = "1.3.6.1.4.1.9.9.23.1.2.1.1"
 IF = "1.3.6.1.2.1.2.2.1"
 IFX = "1.3.6.1.2.1.31.1.1.1"
+MAC_ID = re.compile(r"(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}|(?:[0-9a-f]{4}\.){2}[0-9a-f]{4}|[0-9a-f]{12}", re.I)
+
+
+def identifiable_neighbor(label: str) -> bool:
+    value = label.strip()
+    return bool(value and value.casefold() not in {"not advertised", "unknown", "n/a", "none", "-"}
+                and not MAC_ID.fullmatch(value))
 
 
 def column(bindings: dict[str, str], oid: str) -> dict[str, str]:
@@ -93,11 +100,15 @@ def neighbors(data: dict[str, str]):
     for suffix, remote_port in column(data, LLDP + ".7").items():
         indices = suffix.split(".")
         management = addresses.get(suffix, [])
-        name = names.get(suffix) or chassis.get(suffix) or next(iter(management), None)
+        name = names.get(suffix) or ""
+        if not identifiable_neighbor(name):
+            name = next(iter(management), None) or chassis.get(suffix) or name
         if len(indices) == 3 and name and remote_port:
             index = indices[1]
             lldp_indices.add(index)
-            local = lldp_ports.get(index) or interface_names.get(index) or index
+            local = lldp_ports.get(index) or ""
+            if not identifiable_neighbor(local) or local.isdecimal():
+                local = interface_names.get(index) or local or index
             yield "lldp", index, local, name, remote_port, management
     cdp_names = column(data, CDP + ".6")
     for suffix, remote_port in column(data, CDP + ".7").items():
@@ -154,6 +165,7 @@ def merge_observation(db: Session, diagram_id: int, device: Device, data: dict[s
     now = utc_now()
     nodes = db.query(TopologyNode).filter_by(diagram_id=diagram_id).all()
     by_key = {item.key: item for item in nodes}
+    by_id = {item.id: item for item in nodes}
     known = db.query(Device).all()
     known_names: dict[str, Device | None] = {}
     for item in known:
@@ -171,6 +183,7 @@ def merge_observation(db: Session, diagram_id: int, device: Device, data: dict[s
         db.flush()
         change(db, diagram_id, "new_device", f"Discovered {result.label}")
         by_key[key] = result
+        by_id[result.id] = result
         return result
 
     source = node(device.name, device)
@@ -208,7 +221,10 @@ def merge_observation(db: Session, diagram_id: int, device: Device, data: dict[s
 
     for method, index, local_port, remote_name, remote_port, management in neighbors(data):
         identity = next((known_names[address] for address in management if known_names.get(address)), None)
-        target = node(remote_name, identity or known_names.get(remote_name.casefold()))
+        identity = identity or known_names.get(remote_name.casefold())
+        if identity is None and not identifiable_neighbor(remote_name):
+            continue
+        target = node(remote_name, identity)
         if source.id == target.id:
             continue
         key = link_key(source.id, local_port, target.id, remote_port)
@@ -231,6 +247,10 @@ def merge_observation(db: Session, diagram_id: int, device: Device, data: dict[s
         update_evidence(link, local_port, interface, True)
     for key, link in links.items():
         if not link.manual and key not in observed and str(source.id) in link.evidence:
+            peer_id = link.target_id if link.source_id == source.id else link.source_id
+            peer = by_id.get(peer_id)
+            if peer and not (peer.device_id or peer.manual or identifiable_neighbor(peer.label)):
+                continue
             port = link.source_port if link.source_id == source.id else link.target_port
             interface = next((item for item in interfaces.values() if port_key(item["name"]) == port_key(port)), None)
             if interface is not None:

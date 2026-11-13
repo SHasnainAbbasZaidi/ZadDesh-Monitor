@@ -134,6 +134,9 @@ test('add-on workspace and published diagram access', async ({ page, request }) 
   await workspace.getByPlaceholder('Find a node').fill('Fixture router');
   await expect(workspace.getByRole('button', { name: /Fixture switch/ })).toHaveCount(0);
   await workspace.getByRole('button', { name: /Fixture router/ }).click();
+  const ports = workspace.getByRole('region', { name: 'Connected ports' });
+  await expect(ports.getByRole('button', { name: /Gi0\/2 ↔ Fixture switch · Gi0\/1/ })).toBeVisible();
+  await expect(workspace.getByText('Configure device on map', { exact: true })).toBeVisible();
   await expect(workspace.getByLabel('Node label')).toHaveValue('Fixture router');
   await workspace.getByLabel('Node label').fill('Renamed fixture router');
   await workspace.getByRole('button', { name: 'Save node' }).click();

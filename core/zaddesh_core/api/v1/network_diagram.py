@@ -29,7 +29,7 @@ from zaddesh_core.models.infrastructure import Collector, Device, DeviceCredenti
 from zaddesh_core.models.system import Dashboard, Widget
 from zaddesh_core.models.topology import TopologyChange, TopologyDiagram, TopologyLink, TopologyNode, TopologyRun
 from zaddesh_core.security import allows_secret_transport, decrypt_secret
-from zaddesh_core.topology import link_key, merge_observation
+from zaddesh_core.topology import MAC_ID, identifiable_neighbor, link_key, merge_observation
 
 logger = logging.getLogger(__name__)
 AUTOMATIC_DIAGRAM = "inventory"
@@ -96,6 +96,8 @@ def graph(db: Session, item: TopologyDiagram):
     rows = db.query(TopologyNode, Device).outerjoin(Device, TopologyNode.device_id == Device.id).filter(
         TopologyNode.diagram_id == item.id,
     ).order_by(TopologyNode.id).all()
+    rows = [(node, device) for node, device in rows if device or node.manual or identifiable_neighbor(node.label)]
+    node_ids = {node.id for node, _ in rows}
     links = db.query(TopologyLink).filter_by(diagram_id=item.id).order_by(TopologyLink.id)
     return {"id": item.id, "name": item.name, "published": item.published, "layout": item.layout,
             "automatic": item.automatic_key is not None,
@@ -104,11 +106,12 @@ def graph(db: Session, item: TopologyDiagram):
                        "status": device.status if device else "unmanaged", "alerts": alerts.get(device.id, 0) if device else 0,
                        "kind": node.kind, "manual": node.manual, "interfaces": node.metadata_json.get("interfaces", {})}
                       for node, device in rows],
-            "links": [{"id": link.id, "source": link.source_id, "target": link.target_id, "source_port": link.source_port,
-                       "target_port": link.target_port, "method": link.method,
+            "links": [{"id": link.id, "source": link.source_id, "target": link.target_id,
+                       "source_port": "" if MAC_ID.fullmatch(link.source_port.strip()) else link.source_port,
+                       "target_port": "" if MAC_ID.fullmatch(link.target_port.strip()) else link.target_port, "method": link.method,
                        "confidence": "high" if link.method in {"lldp", "cdp"} else "manual",
                        "status": link.status, "speed": link.speed, "utilization": link.utilization, "manual": link.manual}
-                      for link in links]}
+                      for link in links if link.source_id in node_ids and link.target_id in node_ids]}
 
 
 @router.get("/{diagram_id}")

@@ -54,6 +54,8 @@ def test_discovery_rbac_merge_publication_and_link_recovery(client, db_session, 
                            "1.0.8802.1.1.2.1.4.1.1.9.0.1.1": neighbor})
             if check_id == first:
                 values["1.0.8802.1.1.2.1.4.2.1.3.0.1.1.1.4.192.0.2.5"] = "2"
+                values.update({"1.0.8802.1.1.2.1.4.1.1.7.0.1.2": "Eth1",
+                               "1.0.8802.1.1.2.1.4.1.1.5.0.1.2": "00:c8:8b:b9:d0:4e"})
         result = client.post(f"http://127.0.0.1/api/v1/collectors/topology-result/{task['run_id']}",
                              headers=collector, json={"lease": task["lease"], "values": values})
         assert result.status_code == 200 and result.json()["status"] == "complete"
@@ -63,6 +65,7 @@ def test_discovery_rbac_merge_publication_and_link_recovery(client, db_session, 
     graph = client.get(route, headers=admin_headers)
     assert credentials["auth_password"] not in graph.text
     assert len(graph.json()["nodes"]) == 2 and len(graph.json()["links"]) == 1
+    assert "00:c8:8b:b9:d0:4e" not in graph.text
     assert graph.json()["links"][0]["confidence"] == "high"
     node_id = next(node["id"] for node in graph.json()["nodes"] if node["device_id"] == first_device)
     assert client.put(f"{route}/nodes/{node_id}", headers=admin_headers, json={

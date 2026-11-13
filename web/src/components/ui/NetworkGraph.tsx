@@ -8,11 +8,12 @@ import { expandedLayout } from './topologyLayout';
 
 use([GraphChart, TooltipComponent, CanvasRenderer]);
 
+export type DiagramPort = { name: string; status: string; speed?: number | null; utilization?: number | null };
 export type Diagram = {
   automatic?: boolean;
   id: number; name: string; published: boolean;
   layout: { mode?: string; positions?: Record<string, [number, number]> };
-  nodes: { id: number; label: string; status: string; kind: string; alerts: number; site_id?: number; ip?: string; device_id?: number; manual?: boolean; interfaces?: object }[];
+  nodes: { id: number; label: string; status: string; kind: string; alerts: number; site_id?: number; ip?: string; device_id?: number; manual?: boolean; interfaces?: Record<string, DiagramPort> }[];
   links: { id: number; source: number; target: number; source_port: string; target_port: string; method: string; confidence: string; status: string; speed?: number; utilization?: number; manual?: boolean }[];
 };
 const nodeIcons: Record<string, string> = {

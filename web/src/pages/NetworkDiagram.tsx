@@ -43,6 +43,7 @@ export default function NetworkDiagram() {
   const [fit, setFit] = useState(0);
   const [expanded, setExpanded] = useState(true);
   const mapSvg = useRef<SVGSVGElement>(null);
+  const inspector = useRef<HTMLElement>(null);
   const choseDiagram = useRef(false);
   const png = useRef<() => string>();
   const endpoint = `/network-diagram/${id}`;
@@ -88,6 +89,20 @@ export default function NetworkDiagram() {
 
   const activeGraph = graph?.id === id ? graph : undefined;
   const visible = activeGraph && search.trim() ? activeGraph.nodes.filter(node => node.label.toLowerCase().includes(search.trim().toLowerCase())) : activeGraph?.nodes;
+  const nodesById = new Map(activeGraph?.nodes.map(node => [node.id, node]));
+  const connections = selectedNode ? activeGraph?.links.flatMap(link => {
+    if (link.source === selectedNode.id) return [{ link, local: link.source_port, remote: link.target_port, peer: nodesById.get(link.target) }];
+    if (link.target === selectedNode.id) return [{ link, local: link.target_port, remote: link.source_port, peer: nodesById.get(link.source) }];
+    return [];
+  }) ?? [] : [];
+  const ports = Object.values(selectedNode?.interfaces ?? {}).sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true }));
+
+  function inspect(kind: 'node' | 'edge', item: number) {
+    setSelection({ kind, id: item });
+  }
+  useEffect(() => {
+    if (selection) inspector.current?.scrollIntoView({ block: 'start' });
+  }, [selection]);
   // Keep the graph stable while the operator is moving nodes. Refresh data once the layout is locked.
   const editingGraph = useRef<Diagram>();
   useEffect(() => { if (locked) editingGraph.current = undefined; }, [locked]);
@@ -195,39 +210,54 @@ export default function NetworkDiagram() {
             <input id="topology-find" className="dash-select w-full pl-7" placeholder="Find a node" value={search} onChange={event => setSearch(event.target.value)} />
           </div>
           <ul className="topology-device-list">
-            {visible?.map(node => <li key={node.id}><button type="button" aria-pressed={selectedNode?.id === node.id} onClick={() => setSelection({ kind: 'node', id: node.id })}>
+            {visible?.map(node => <li key={node.id}><button type="button" aria-pressed={selectedNode?.id === node.id} onClick={() => inspect('node', node.id)}>
               <Server size={15} aria-hidden="true" /><span><strong>{node.label}</strong><small>{node.kind} · {node.status}</small></span></button></li>)}
           </ul>
           {!visible?.length && <p className="ops-muted text-xs mt-3">{search ? 'No matching devices' : 'No devices on this diagram'}</p>}
         </aside>
         <div className="topology-canvas">
       {activeGraph.nodes.length && expanded ? <ExpandedTopology key={id} diagram={canvasGraph ?? activeGraph} selected={selection}
-        locked={locked} positions={positions} svgRef={mapSvg} onSelect={(kind, item) => setSelection({ kind, id: item })}
+        locked={locked} positions={positions} svgRef={mapSvg} onSelect={inspect}
         onMove={(node, point) => setPositions(previous => ({ ...previous, [node]: point }))} />
         : activeGraph.nodes.length ? <Suspense fallback={<p role="status">Loading diagram…</p>}>
-        <Graph key={`${id}:${fit}`} diagram={canvasGraph ?? activeGraph} draggable={!locked} onSelect={(kind, item) => setSelection({ kind, id: item })}
+        <Graph key={`${id}:${fit}`} diagram={canvasGraph ?? activeGraph} draggable={!locked} onSelect={inspect}
           onMove={!locked ? (node, point) => setPositions(previous => ({ ...previous, [node]: point })) : undefined}
           selectedNodeId={selectedNode?.id} height={610} exportGraph={exporter => { png.current = exporter; }} />
       </Suspense> : <p className="ops-empty">{activeGraph.automatic
         ? 'Waiting for successful SNMPv3 discovery results.'
         : 'Run discovery or add a node to populate this diagram.'}</p>}
         </div>
-        <aside className="topology-inspector" aria-label="Topology inspector">
+        <aside ref={inspector} className="topology-inspector" aria-label="Topology inspector">
           <h3 className="flex items-center gap-2 font-semibold text-sm"><Cable size={16} aria-hidden="true" />Inspector</h3>
       {selectedNode && <div className="mt-4 space-y-2" aria-label="Node details">
         <h3 className="font-semibold">{selectedNode.label} · {selectedNode.kind}</h3>
         <p><Badge status={selectedNode.status} /> {selectedNode.ip} · {selectedNode.alerts} active alerts</p>
-        <div className="flex flex-wrap gap-2">{activeGraph.links.filter(link => [link.source, link.target].includes(selectedNode.id)).map(link =>
-          <button className="ops-button" key={link.id} onClick={() => setSelection({ kind: 'edge', id: link.id })}>{link.source_port} ↔ {link.target_port}</button>)}</div>
+        <section aria-label="Connected ports" className="space-y-2">
+          <h4 className="text-sm font-semibold">Connected ports ({connections.length})</h4>
+          {!connections.length && <p className="text-xs ops-muted">No links to named devices have been discovered or added.</p>}
+          <ul className="space-y-1">{connections.map(({ link, local, remote, peer }) => <li key={link.id}>
+            <button className="ops-button whitespace-normal text-left w-full" onClick={() => inspect('edge', link.id)}>
+              <span className="min-w-0 break-words">{local || 'Unknown port'} ↔ {peer?.label} · {remote || 'Unknown port'}</span>
+              <Badge status={link.status} />
+            </button>
+          </li>)}</ul>
+        </section>
+        <details className="entry-details"><summary className="text-sm font-semibold">Discovered interfaces ({ports.length})</summary>
+          {ports.length ? <ul className="divide-y divide-slate-500/25">{ports.map((port, index) => <li key={`${port.name}-${index}`} className="flex flex-wrap items-center gap-2 py-1 text-xs">
+            <strong className="break-all">{port.name}</strong><Badge status={port.status} />
+            {port.speed != null && <span className="ops-muted">{(port.speed / 1_000_000).toLocaleString()} Mbps</span>}
+            {port.utilization != null && <span className="ops-muted">{port.utilization.toFixed(1)}% utilized</span>}
+          </li>)}</ul> : <p className="text-xs ops-muted">No SNMP interface data has been collected for this device.</p>}
+        </details>
       </div>}
       {selectedLink && <div className="mt-4 space-y-2" aria-label="Link details">
-        <h3 className="font-semibold">{selectedLink.source_port} ↔ {selectedLink.target_port}</h3>
+        <h3 className="font-semibold">{nodesById.get(selectedLink.source)?.label} · {selectedLink.source_port || 'Unknown port'} ↔ {nodesById.get(selectedLink.target)?.label} · {selectedLink.target_port || 'Unknown port'}</h3>
         <p><Badge status={selectedLink.status} /> {selectedLink.method.toUpperCase()} · {selectedLink.confidence} confidence
           {selectedLink.speed != null && ` · ${selectedLink.speed.toLocaleString()} bps`}
           {selectedLink.utilization != null && ` · ${selectedLink.utilization.toFixed(1)}% utilization`}</p>
         <button className="ops-button" onClick={() => void mutate(`${endpoint}/links/${selectedLink.id}`, 'DELETE')}>Remove link</button>
       </div>}
-      <details className="mt-4" open={Boolean(selectedNode || selectedLink)}><summary className="cursor-pointer text-sm font-semibold">Manual edits</summary>
+      <details key={selectedNode?.id ?? (selectedLink ? `link-${selectedLink.id}` : 'new')} className="mt-4" open={Boolean(selectedNode || selectedLink)}><summary className="cursor-pointer text-sm font-semibold">{selectedNode ? 'Configure device on map' : selectedLink ? 'Configure link on map' : 'Add a device or link'}</summary>
         <form className="my-2 flex flex-wrap items-end gap-2" key={`node-${selectedNode?.id ?? 'new'}`} onSubmit={event => {
           event.preventDefault();
           const data = new FormData(event.currentTarget);
