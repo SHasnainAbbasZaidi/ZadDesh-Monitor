@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import datetime
 import json
-from typing import List, Optional
+from typing import Annotated, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from pydantic import BaseModel, Field, PositiveInt, StringConstraints
+from sqlalchemy import func, update
 
 from zaddesh_core.database import get_db
 from zaddesh_core.config import settings
 from zaddesh_core.models.infrastructure import Device, DeviceCredential, Site, Group
 from zaddesh_core.models.checks import Check, CheckState
-from zaddesh_core.models.auth import User
+from zaddesh_core.models.auth import AuditLog, User
+from zaddesh_core.models.topology import TopologyNode
+from zaddesh_core.models.zabbix import ZabbixConnection, ZabbixHiddenHost
+from zaddesh_core.api.v1.stream import notify_change
+from zaddesh_core.api.v1.zabbix import hidden_host_ids, source_key
 from zaddesh_core.schemas.device import (
     DeviceCreate,
     DeviceUpdate,
@@ -281,15 +286,47 @@ def update_device(
     return device
 
 
+class DeviceRemoval(BaseModel):
+    device_ids: list[PositiveInt] = Field(default_factory=list, max_length=1000)
+    zabbix_host_ids: list[Annotated[str, StringConstraints(pattern=r"^[0-9]{1,20}$")]] = Field(
+        default_factory=list, max_length=1000,
+    )
+
+
+@router.post("/devices/bulk-delete")
+def bulk_delete_devices(payload: DeviceRemoval, user: User = Depends(require_role(["admin"])),
+                        db: Session = Depends(get_db)):
+    hidden = 0
+    if payload.zabbix_host_ids:
+        connection = db.get(ZabbixConnection, 1)
+        if connection is None:
+            raise HTTPException(409, "The Zabbix connection changed. Refresh the inventory and try again.")
+        db.execute(update(ZabbixConnection).where(ZabbixConnection.id == 1).values(id=ZabbixConnection.id))
+        new_hosts = set(payload.zabbix_host_ids) - hidden_host_ids(db, connection.api_url)
+        db.add_all(ZabbixHiddenHost(source_key=source_key(connection.api_url), host_id=host_id) for host_id in new_hosts)
+        hidden = len(new_hosts)
+    ids = sorted(set(payload.device_ids))
+    deleted = 0
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        db.query(TopologyNode).filter(TopologyNode.device_id.in_(chunk)).delete(synchronize_session=False)
+        deleted += db.query(Device).filter(Device.id.in_(chunk)).delete(synchronize_session=False)
+    db.add(AuditLog(user_id=user.id, action="devices.bulk_deleted", entity_type="device",
+                    details={"deleted": deleted, "zabbix_hidden": hidden}))
+    db.commit()
+    notify_change()
+    return {"deleted": deleted, "zabbix_hidden": hidden}
+
+
 @router.delete("/devices/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_device(
     device_id: int,
     current_user: User = Depends(require_role(["admin"])),
     db: Session = Depends(get_db),
 ):
-    device = db.query(Device).filter(Device.id == device_id).first()
-    if not device:
+    db.query(TopologyNode).filter(TopologyNode.device_id == device_id).delete(synchronize_session=False)
+    if not db.query(Device).filter(Device.id == device_id).delete(synchronize_session=False):
         raise HTTPException(status_code=404, detail="Device not found")
-    db.delete(device)
     db.commit()
+    notify_change()
 

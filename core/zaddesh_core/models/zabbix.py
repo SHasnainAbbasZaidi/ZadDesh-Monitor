@@ -23,6 +23,13 @@ class ZabbixHostImport(Base):
     device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
 
 
+class ZabbixHiddenHost(Base):
+    __tablename__ = "zabbix_hidden_hosts"
+
+    source_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    host_id: Mapped[str] = mapped_column(String(20), primary_key=True)
+
+
 class ZabbixAlertDismissal(Base):
     __tablename__ = "zabbix_alert_dismissals"
 

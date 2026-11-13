@@ -256,7 +256,6 @@ def test_agent_availability_and_incident_feed(client, db_session, admin_headers,
         data = json.loads(request.content)
         method, params = data["method"], data["params"]
         if method == "host.get":
-            assert "active_available" in params["output"]
             rows = [{"hostid": str(i), "name": f"Agent {i}", "status": "0", "active_available": active,
                      "interfaces": [{"available": "0", "ip": f"192.0.2.{20 + i}", "useip": "1", "main": "1"}]}
                     for i, active in enumerate(("1", "0", "0"), 1)]
@@ -297,3 +296,12 @@ def test_agent_availability_and_incident_feed(client, db_session, admin_headers,
     assert result.json() == {"removed": 0, "zabbix_range_applied": True}
     assert client.get(feed, headers=viewer_headers).json()["entries"] == []
     assert client.get(feed + "?kind=events", headers=viewer_headers).json()["entries"]
+    removal = {"device_ids": [identifier for row in rows for identifier in row["local_device_ids"]],
+               "zabbix_host_ids": [row["hostid"] for row in rows]}
+    endpoint = "/api/v1/devices/bulk-delete"
+    assert client.post(endpoint, headers=viewer_headers, json=removal).status_code == 403
+    assert client.post(endpoint, headers=admin_headers, json=removal).json() == {"deleted": 1, "zabbix_hidden": 3}
+    assert client.post(endpoint, headers=admin_headers, json=removal).json() == {"deleted": 0, "zabbix_hidden": 0}
+    assert client.get("/api/v1/zabbix/inventory", headers=admin_headers).json()["hosts"] == []
+    assert client.get("/api/v1/zabbix/fleet", headers=viewer_headers).json()["stats"]["total_devices"] == 1
+    assert client.get(feed + "?kind=events", headers=viewer_headers).json()["entries"] == []

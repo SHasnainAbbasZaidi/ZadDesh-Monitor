@@ -51,6 +51,10 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
   const [groups, setGroups] = useState<Group[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [loading, setLoading] = useState(true);
+  const [selection, setSelection] = useState<Set<string>>(new Set());
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
   // Selected Device Drawer / Modal
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
@@ -209,7 +213,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
       loadDevices();
       setZabbixRefresh(value => value + 1);
     } catch (err) {
-      console.error('Failed to delete device:', err);
+      setDeleteError((err as Error).message);
     }
   };
 
@@ -229,6 +233,37 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
       return device ? [device.name, device.hostname] : [];
     }),
   ]));
+  const visibleKeys = [...filteredDevices.map(device => `local-${device.id}`), ...filteredZabbix.map(host => `zabbix-${host.hostid}`)];
+  const allSelected = visibleKeys.length > 0 && visibleKeys.every(key => selection.has(key));
+  const selectedHosts = zabbixHosts.filter(host => selection.has(`zabbix-${host.hostid}`));
+  const selectedIds = [...new Set([...devices.filter(device => selection.has(`local-${device.id}`)).map(device => device.id),
+    ...selectedHosts.flatMap(host => host.local_device_ids)])];
+
+  function toggleSelection(keys: string[], checked: boolean) {
+    setSelection(previous => {
+      const next = new Set(previous);
+      for (const key of keys) checked ? next.add(key) : next.delete(key);
+      return next;
+    });
+  }
+
+  async function deleteSelection() {
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await api.deleteDevices(selectedIds, selectedHosts.map(host => host.hostid));
+      setDevices(previous => previous.filter(device => !selectedIds.includes(device.id)));
+      setZabbixHosts(previous => previous.filter(host => !selection.has(`zabbix-${host.hostid}`)));
+      if (selectedDevice && selectedIds.includes(selectedDevice.id)) setSelectedDevice(null);
+      setSelection(new Set());
+      setConfirmDelete(false);
+      refreshInventory();
+    } catch (err) {
+      setDeleteError((err as Error).message);
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   function refreshInventory() {
     void loadDevices();
@@ -293,6 +328,14 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
       </div>
 
       {loadError && <p role="alert" className="ops-notice">{loadError}</p>}
+      {deleteError && !confirmDelete && <p role="alert" className="ops-notice">{deleteError}</p>}
+      {isAdmin && selection.size > 0 && <div className="ops-notice">
+        <strong>{selection.size} selected</strong>
+        <button type="button" className="ops-button" onClick={() => { setDeleteError(''); setConfirmDelete(true); }}>
+          <Trash2 size={15} aria-hidden="true" /> Delete selected
+        </button>
+        <button type="button" className="ops-button" onClick={() => setSelection(new Set())}>Clear selection</button>
+      </div>}
       {zabbixError && <p role="alert" className="ops-notice">Could not refresh Zabbix inventory. {zabbixError}</p>}
       {zabbixLoading && <p role="status" className="ops-muted text-sm">Checking Zabbix inventory…</p>}
       {!loading && !zabbixLoading && !loadError && !filteredDevices.length && !filteredZabbix.length && <p className="ops-empty">No devices match this view.</p>}
@@ -302,6 +345,9 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
           <table className="w-full text-left text-sm">
             <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 text-[11px] font-mono uppercase text-slate-400">
               <tr>
+                {isAdmin && <th scope="col" className="pl-5"><input type="checkbox" aria-label="Select all visible devices"
+                  checked={allSelected} disabled={!visibleKeys.length} ref={input => { if (input) input.indeterminate = !allSelected && visibleKeys.some(key => selection.has(key)); }}
+                  onChange={event => toggleSelection(visibleKeys, event.target.checked)} /></th>}
                 <th className="px-5 py-3.5">Status</th>
                 <th className="px-5 py-3.5">Device Name</th>
                 <th className="px-5 py-3.5">Target IP / Hostname</th>
@@ -318,6 +364,8 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
                 const addresses = [...new Set(host.interfaces.map(item => item.useip === '1' ? item.ip : item.dns).filter(Boolean))];
                 const local = host.local_device_ids.length === 1 ? devicesById.get(host.local_device_ids[0]) : undefined;
                 return <tr key={`zabbix-${host.hostid}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                  {isAdmin && <td className="pl-5"><input type="checkbox" aria-label={`Select ${label}`}
+                    checked={selection.has(`zabbix-${host.hostid}`)} onChange={event => toggleSelection([`zabbix-${host.hostid}`], event.target.checked)} /></td>}
                   <td className="px-5 py-3.5 whitespace-nowrap"><Badge status={health.status}>{health.label}</Badge></td>
                   <td className="px-5 py-3.5 font-medium">
                     <div className="flex flex-wrap items-center gap-2">
@@ -342,6 +390,8 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
                   key={dev.id}
                   className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors"
                 >
+                  {isAdmin && <td className="pl-5"><input type="checkbox" aria-label={`Select ${dev.name}`}
+                    checked={selection.has(`local-${dev.id}`)} onChange={event => toggleSelection([`local-${dev.id}`], event.target.checked)} /></td>}
                   <td className="px-5 py-3.5 whitespace-nowrap">
                     <Badge status={dev.status} />
                   </td>
@@ -385,6 +435,21 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
           </table>
         </div>
       </Card>
+
+      <Modal title="Delete selected devices" isOpen={confirmDelete} onClose={() => { if (!deleting) setConfirmDelete(false); }}>
+        <div className="space-y-3 text-sm">
+          {selectedIds.length > 0 && <p>This permanently deletes {selectedIds.length} ZadDesh {selectedIds.length === 1 ? 'device' : 'devices'} and associated checks and history.</p>}
+          {selectedHosts.length > 0 && <p>Selected Zabbix hosts will be hidden in ZadDesh. You can add them again from Zabbix devices.</p>}
+          {deleteError && <p role="alert" className="ops-notice">{deleteError}</p>}
+          <div className="flex justify-end gap-2">
+            <button type="button" className="ops-button" disabled={deleting} onClick={() => setConfirmDelete(false)}>Cancel</button>
+            <button type="button" disabled={deleting || (!selectedIds.length && !selectedHosts.length)} onClick={() => void deleteSelection()}
+              className="rounded-lg bg-rose-700 px-3 py-2 font-semibold text-white hover:bg-rose-800 disabled:opacity-50">
+              {deleting ? 'Deleting…' : 'Confirm deletion'}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Device Telemetry & Detail Modal */}
       {selectedDevice && (

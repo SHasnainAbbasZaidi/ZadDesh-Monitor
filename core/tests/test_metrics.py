@@ -6,6 +6,22 @@ from zaddesh_core.config import settings
 import datetime
 
 
+def test_replay_after_bulk_deletion_keeps_metrics_for_remaining_devices(client, admin_headers, monkeypatch):
+    token = secrets.token_hex(32)
+    monkeypatch.setattr(settings.collector, "shared_secret", token)
+    headers = {"Authorization": f"Bearer {token}"}
+    ids = [client.post("/api/v1/devices", headers=admin_headers, json={"name": f"Device {n}",
+           "ip": f"192.0.2.{n}", "initial_check_types": ["icmp"]}).json()["id"] for n in (1, 2)]
+    assert client.post("/api/v1/devices/bulk-delete", headers=admin_headers,
+                       json={"device_ids": ids[:1]}).json()["deleted"] == 1
+    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    points = [{"device_id": device_id, "metric_key": "icmp.rtt_avg", "value": 3, "timestamp": timestamp}
+              for device_id in ids]
+    response = client.post("/api/v1/metrics/ingest", headers=headers, json={"collector_id": 1, "points": points})
+    assert response.status_code == 202
+    assert response.json() == {"ingested": 1, "duplicates": 0, "discarded": 1, "status": "success"}
+
+
 def test_probe_latency_includes_all_devices_and_omits_failed_latency(client, admin_headers, db_session):
     now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) - datetime.timedelta(seconds=1)
     devices = [Device(name=f"latency-target-{index}", ip=f"192.0.2.{index}") for index in range(1, 10)]

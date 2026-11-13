@@ -58,8 +58,6 @@ def ingest_metrics(
 
     ids = {point.device_id for point in payload.points}
     devices = {row.id: row for row in db.query(Device).filter(Device.id.in_(ids)).all()}
-    if ids != devices.keys():
-        raise HTTPException(422, "Unknown device in batch")
     if authorized is not None and authorized.site_id is not None:
         if any(device.site_id != authorized.site_id for device in devices.values()):
             raise HTTPException(403, "Device is outside the collector site")
@@ -73,10 +71,15 @@ def ingest_metrics(
     records = []
     now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     for point in payload.points:
+        device = devices.get(point.device_id)
         check = checks.get(point.check_id) if point.check_id is not None else None
-        if point.check_id is not None and (check is None or check.device_id != point.device_id):
-            raise HTTPException(422, "Check does not belong to the device")
+        if device is None or (point.check_id is not None and check is None):
+            continue  # A collector can replay polls for inventory removed after collection.
         timestamp = utc_naive(point.timestamp)
+        if payload.collector_id is not None and (timestamp < device.created_at or (check is not None and timestamp < check.created_at)):
+            continue  # SQLite can reuse the ID of a deleted device or check.
+        if check is not None and check.device_id != point.device_id:
+            raise HTTPException(422, "Check does not belong to the device")
         fingerprint = hashlib.sha256(json.dumps([
             point.device_id, point.check_id, point.metric_key, timestamp.isoformat(), point.value, point.tags,
         ], sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
@@ -91,6 +94,9 @@ def ingest_metrics(
             if previous is None or timestamp > previous[0]:
                 observations[check.id] = (timestamp, point.value == 1.0)
 
+    discarded = len(payload.points) - len(records)
+    if not records:
+        return {"ingested": 0, "duplicates": 0, "discarded": discarded, "status": "success"}
     dialect = db.get_bind().dialect.name
     if dialect not in {"sqlite", "postgresql"}:
         raise HTTPException(501, "Ingestion requires SQLite or PostgreSQL")
@@ -104,8 +110,8 @@ def ingest_metrics(
         inserted = conn.execute(pg_insert(MetricRaw).on_conflict_do_nothing(
             index_elements=["fingerprint"]), records).rowcount
     inserted_at = time.monotonic()
-    for device in devices.values():
-        device.last_seen = now
+    for device_id in {record["device_id"] for record in records}:
+        devices[device_id].last_seen = now
 
     states = db.query(CheckState).filter(CheckState.check_id.in_(observations)).order_by(
         CheckState.check_id
@@ -194,7 +200,8 @@ def ingest_metrics(
         logger.warning("Slow metrics batch (%d points): prepare/insert %.2fs, state updates %.2fs, commit %.2fs",
                        len(records), inserted_at - started, before_commit - inserted_at, completed - before_commit)
     notify_change()
-    return {"ingested": inserted, "duplicates": len(records) - inserted, "status": "success"}
+    return {"ingested": inserted, "duplicates": len(records) - inserted, "status": "success",
+            **({"discarded": discarded} if discarded else {})}
 
 
 def utc_naive(value: datetime.datetime) -> datetime.datetime:

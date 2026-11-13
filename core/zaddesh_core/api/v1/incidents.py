@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from zaddesh_core.api.deps import get_current_user, require_role
 from zaddesh_core.api.v1.logs import log_collection
 from zaddesh_core.api.v1.stream import notify_change
-from zaddesh_core.api.v1.zabbix import HOST_FIELDS, local_matches, saved_api, source_key, visible
+from zaddesh_core.api.v1.zabbix import HOST_FIELDS, hidden_host_ids, local_matches, saved_api, source_key, visible
 from zaddesh_core.config import settings
 from zaddesh_core.database import get_db
 from zaddesh_core.incidents import queue_delivery, redact, timeline, utc_now
@@ -205,16 +205,20 @@ def zabbix_incident_feed(
               "time_from": int(earliest.replace(tzinfo=timezone.utc).timestamp()),
               "time_till": int(latest.replace(tzinfo=timezone.utc).timestamp()), "limit": 500}
     with saved_api(db) as api:
-        if device_id is not None or site_id is not None:
+        hidden = hidden_host_ids(db, connection.api_url)
+        if device_id is not None or site_id is not None or hidden:
             query = db.query(Device.id)
             if device_id is not None:
                 query = query.filter(Device.id == device_id)
             if site_id is not None:
                 query = query.filter(Device.site_id == site_id)
-            selected_ids = {row[0] for row in query}
             inventory = api.rows("host.get", HOST_FIELDS)
-            matching = local_matches(db, connection.api_url, inventory)
-            host_ids = [key for key, ids in matching.items() if selected_ids.intersection(ids)]
+            if device_id is not None or site_id is not None:
+                selected_ids = {row[0] for row in query}
+                matching = local_matches(db, connection.api_url, inventory)
+                host_ids = [key for key, ids in matching.items() if key not in hidden and selected_ids.intersection(ids)]
+            else:
+                host_ids = [str(row["hostid"]) for row in inventory if row.get("hostid") and str(row["hostid"]) not in hidden]
             if not host_ids:
                 return {"configured": True, "entries": [], "limited": False, "total": 0, "scan_limited": False}
             params["hostids"] = host_ids

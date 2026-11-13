@@ -94,6 +94,8 @@ export const api = {
     body: JSON.stringify(data),
   }),
   deleteDevice: (id: number) => request<void>(`/devices/${id}`, { method: 'DELETE' }),
+  deleteDevices: (device_ids: number[], zabbix_host_ids: string[]) => request<{ deleted: number; zabbix_hidden: number }>(
+    '/devices/bulk-delete', { method: 'POST', body: JSON.stringify({ device_ids, zabbix_host_ids }) }),
 
   // Sites & Groups
   getSites: () => request<Site[]>('/sites'),

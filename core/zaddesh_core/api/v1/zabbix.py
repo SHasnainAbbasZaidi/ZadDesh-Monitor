@@ -21,7 +21,7 @@ from zaddesh_core.models.auth import AuditLog, User
 from zaddesh_core.models.checks import Check, CheckState
 from zaddesh_core.models.infrastructure import Device, DeviceCredential
 from zaddesh_core.models.metrics import MetricRaw
-from zaddesh_core.models.zabbix import ZabbixConnection, ZabbixHostImport
+from zaddesh_core.models.zabbix import ZabbixConnection, ZabbixHiddenHost, ZabbixHostImport
 from zaddesh_core.security import allows_secret_transport, decrypt_secret, encrypt_secret
 from zaddesh_core.zabbix import ZabbixAPI, normalize_url
 from zaddesh_core.zabbix_import import canonical_ip, duration, interface_target, prepare_checks, resolve_interface_credentials, target_name
@@ -111,6 +111,10 @@ def host_health(row: dict[str, Any]) -> tuple[str, str]:
 
 def source_key(url: str) -> str:
     return sha256(url.encode()).hexdigest()
+
+
+def hidden_host_ids(db: Session, url: str) -> set[str]:
+    return {row[0] for row in db.query(ZabbixHiddenHost.host_id).filter_by(source_key=source_key(url))}
 
 
 def local_matches(db: Session, url: str, rows: list[dict[str, Any]]) -> dict[str, list[int]]:
@@ -262,8 +266,9 @@ def import_host(host_id: HostID, user: User = Depends(admin), db: Session = Depe
     if not locked:
         raise HTTPException(409, "The Zabbix connection changed during import. Try again.")
     existing = local_matches(db, url, [host])[host_id]
+    db.query(ZabbixHiddenHost).filter_by(source_key=source_key(url), host_id=host_id).delete()
     if existing:
-        db.rollback()
+        db.commit()
         return {"status": "already_added", "device_id": existing[0], "checks_created": 0, "skipped": {}}
     device = Device(name=name, ip=target, hostname=hostname, is_monitored=str(host.get("status")) == "0", status="unknown")
     db.add(device)
@@ -293,8 +298,16 @@ def import_host(host_id: HostID, user: User = Depends(admin), db: Session = Depe
 @router.get("/problems")
 def read_problems(db: Session = Depends(get_db)):
     with saved_api(db) as api:
-        rows = api.rows("problem.get", {"output": PROBLEM_FIELDS, "recent": False, "limit": 100,
-                                       "sortfield": "eventid", "sortorder": "DESC"})
+        params: dict[str, Any] = {"output": PROBLEM_FIELDS, "recent": False, "limit": 100,
+                                  "sortfield": "eventid", "sortorder": "DESC"}
+        hidden = hidden_host_ids(db, str(api.url))
+        if hidden:
+            host_ids = [row["hostid"] for row in api.rows("host.get", {"output": ["hostid"]})
+                        if row.get("hostid") and str(row["hostid"]) not in hidden]
+            if not host_ids:
+                return []
+            params["hostids"] = host_ids
+        rows = api.rows("problem.get", params)
         return [{key: visible(row.get(key), api.token) for key in PROBLEM_FIELDS} for row in rows[:100]]
 
 
@@ -304,6 +317,8 @@ def read_inventory(db: Session = Depends(get_db)):
         return {"configured": False, "hosts": []}
     with saved_api(db) as api:
         rows = read_agent_hosts(api, {**HOST_FIELDS, "sortfield": "host"})
+        hidden = hidden_host_ids(db, str(api.url))
+        rows = [row for row in rows if str(row.get("hostid")) not in hidden]
         annotate_agent_reporting(api, rows)
         return {"configured": True, "hosts": inventory_hosts(db, api, rows)}
 
