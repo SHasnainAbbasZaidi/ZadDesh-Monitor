@@ -7,7 +7,7 @@ from typing import Any, Literal, cast
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import AwareDatetime, BaseModel, Field
 from pymongo.errors import PyMongoError
-from sqlalchemy import and_, case, func, or_, update
+from sqlalchemy import String, and_, case, cast as cast_sql, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,7 @@ from zaddesh_core.models.checks import Check
 from zaddesh_core.models.incidents import Incident, IncidentDelivery, IncidentFilter, IncidentParent, IncidentTimeline
 from zaddesh_core.models.infrastructure import Collector, Device, Site
 from zaddesh_core.models.metrics import MetricRaw
+from zaddesh_core.models.topology import TopologyLink, TopologyNode
 from zaddesh_core.models.zabbix import ZabbixAlertDismissal, ZabbixConnection
 
 
@@ -38,8 +39,38 @@ CONNECTION_EVENT_TYPES = ("connect", "disconnect", "connected", "disconnected", 
                           "connection_opened", "connection_closed", "connection_lost", "connection_restored")
 ZABBIX_SEVERITY = {"0": "info", "1": "info", "2": "warning", "3": "average", "4": "high", "5": "critical"}
 ZABBIX_OFFLINE = re.compile(r"\b(?:device|host) (?:is )?(?:offline|down)\b|\bunavailable by icmp\b|\bno icmp ping\b", re.I)
-ZABBIX_LINK = re.compile(r"\b(?:uplink|downlink)\b.*\b(?:down|offline|unavailable)\b|\blink down\b.*\b(?:uplink|downlink)\b", re.I)
 ZABBIX_NOISE = re.compile(r"^(?:dis)?connect(?:ed|ion)?(?:\b|:)|\b(?:dis)?connected\b|^reconnected\b", re.I)
+Category = Literal["critical", "device_offline", "link_down", "cpu_usage", "memory_usage", "network_usage", "storage_shortage", "other"]
+
+RESOURCE_TERMS = {
+    "cpu_usage": ("cpu", "processor"),
+    "memory_usage": ("memory", " ram "),
+    "network_usage": ("network usage", "network utilization", "network utilisation", "bandwidth", "interface utilization", "interface utilisation", "incoming traffic", "outgoing traffic"),
+    "storage_shortage": ("disk space", "storage", "filesystem", "file system", "free space", "disk usage", "disk utilization", "disk utilisation"),
+}
+HIGH_TERMS = ("high", "above", "exceed", "overload", "over threshold", "saturated", "too much")
+LOW_STORAGE_TERMS = ("low", "shortage", "full", "insufficient", "running out", "out of space", "no space", "less than", "below", "critically")
+LINK_DOWN_TERMS = ("link down", "link is down", "link has gone down", "interface is down", "operational status down", "uplink down", "downlink down")
+TEN_GIG_TERMS = ("tengig", "ten-gig", "ten gig", " 10g", "(10g", "xe-", " te0/", " te1/", " te2/", ":te", "(te", " xge", "eth10g")
+SERVER_TERMS = ("server", "windows", "linux", "esxi", "hyper-v", "proxmox", "ubuntu", "debian", "red hat")
+RESOURCE_CATEGORIES = tuple(
+    (category, subjects, HIGH_TERMS + (LOW_STORAGE_TERMS if category == "storage_shortage" else ()))
+    for category, subjects in RESOURCE_TERMS.items()
+)
+
+
+def zabbix_category(title: str, hosts: str) -> str:
+    text = f" {title.casefold()} "
+    def contains(value, terms):
+        return any(term in value for term in terms)
+    if ZABBIX_OFFLINE.search(title):
+        return "device_offline"
+    if contains(text, LINK_DOWN_TERMS) and (contains(text, TEN_GIG_TERMS) or contains(text + hosts.casefold(), SERVER_TERMS)):
+        return "link_down"
+    for category, subjects, triggers in RESOURCE_CATEGORIES:
+        if contains(text, subjects) and contains(text, triggers):
+            return category
+    return "other"
 
 
 def connection_noise(title):
@@ -51,12 +82,23 @@ def connection_noise(title):
 
 
 def alert_category():
-    link = or_(func.coalesce(Incident.correlation_key, "").startswith("link:"),
-               Alert.title.ilike("link down:%"), Alert.title.ilike("uplink down%"), Alert.title.ilike("downlink down%"))
+    title = " " + func.lower(Alert.title) + " "
+    context = title + func.lower(func.coalesce(Device.os, "")) + " " + func.lower(Device.name)
+    def contains(column, terms):
+        return or_(*(column.contains(term, autoescape=True) for term in terms))
+    topology_link = select(TopologyLink.id).where(
+        Incident.correlation_key == "link:" + cast_sql(TopologyLink.diagram_id, String) + ":" + cast_sql(TopologyLink.id, String),
+        or_(TopologyLink.speed == 10_000_000_000,
+            select(TopologyNode.id).where(TopologyNode.id.in_((TopologyLink.source_id, TopologyLink.target_id)),
+                                          TopologyNode.kind == "server").correlate(TopologyLink).exists()),
+    ).correlate(Incident).exists()
+    link = and_(contains(title, LINK_DOWN_TERMS), or_(contains(title, TEN_GIG_TERMS), contains(context, SERVER_TERMS), topology_link))
     offline = or_(Alert.title.ilike("device offline%"), Alert.title.ilike("device down%"),
                   and_(Alert.rule_id.is_(None), Alert.title.startswith("Availability: "),
                        Check.check_type == "icmp", Device.status == "down"))
-    return case((link, "link_down"), (offline, "device_offline"), else_="other")
+    resources = [(and_(contains(title, subjects), contains(title, triggers)), category)
+                 for category, subjects, triggers in RESOURCE_CATEGORIES]
+    return case((offline, "device_offline"), (link, "link_down"), *resources, else_="other")
 
 
 def alert_not_dismissed():
@@ -100,7 +142,7 @@ def list_incidents(
     q: str = Query("", max_length=120), severity: str | None = None, status: str | None = None,
     device_id: int | None = None, site_id: int | None = None,
     type: Literal["availability", "link", "rule"] | None = None,
-    category: Literal["critical", "device_offline", "link_down", "other"] | None = None,
+    category: Category | None = None,
     view: Literal["all", "current", "history"] = "all", hide_connection_noise: bool = False,
     include_count: bool = False,
     start: AwareDatetime | None = None, end: AwareDatetime | None = None,
@@ -117,7 +159,7 @@ def list_incidents(
             query = query.filter(or_(Alert.status == "resolved", Alert.triggered_at <= cutoff))
     classification = alert_category()
     if category:
-        query = query.filter(classification.in_(("device_offline", "link_down")) if category == "critical"
+        query = query.filter(classification != "other" if category == "critical"
                              else classification == category)
     if hide_connection_noise:
         query = query.filter(or_(classification != "other", ~connection_noise(Alert.title)))
@@ -184,7 +226,7 @@ def list_incident_events(
 @router.get("/zabbix")
 def zabbix_incident_feed(
     kind: Literal["problems", "events"] = "problems",
-    category: Literal["critical", "device_offline", "link_down", "other"] | None = None,
+    category: Category | None = None,
     q: str = Query("", max_length=120), severity: str | None = None, status: str | None = None,
     type: str | None = None, device_id: int | None = None, site_id: int | None = None,
     start: AwareDatetime | None = None, end: AwareDatetime | None = None, errors_only: bool = False,
@@ -252,7 +294,10 @@ def zabbix_incident_feed(
             if not earliest.replace(microsecond=0) <= time <= latest or any(left <= time <= right for left, right in dismissed):
                 continue
             title = visible(row.get("name"), api.token)
-            group = "device_offline" if ZABBIX_OFFLINE.search(title) else "link_down" if ZABBIX_LINK.search(title) else "other"
+            hosts = host_by_event.get(event_id)
+            names = ", ".join(visible(item.get("name") or item.get("host"), api.token)
+                              for item in hosts if isinstance(item, dict)) if isinstance(hosts, list) else ""
+            group = zabbix_category(title, names)
             if group == "other" and ZABBIX_NOISE.search(title):
                 continue
             if category and (group == "other" if category == "critical" else category != group):
@@ -264,9 +309,6 @@ def zabbix_incident_feed(
                      else "acknowledged" if str(row.get("acknowledged")) == "1" else "active")
             level = ZABBIX_SEVERITY.get(str(row.get("severity")), "info")
             event_type = "zabbix_recovery" if recovered else "zabbix_problem"
-            hosts = host_by_event.get(event_id)
-            names = ", ".join(visible(item.get("name") or item.get("host"), api.token)
-                              for item in hosts if isinstance(item, dict)) if isinstance(hosts, list) else ""
             if (status and status != state) or (severity and severity != level) or (kind == "events" and type and type != event_type):
                 continue
             if errors_only and (recovered or level not in {"average", "high", "critical"}):

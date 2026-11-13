@@ -65,7 +65,7 @@ export interface IncidentPreview {
   title: string;
   severity: string;
   timestamp: string;
-  category?: 'device_offline' | 'link_down' | 'other';
+  category?: 'device_offline' | 'link_down' | 'cpu_usage' | 'memory_usage' | 'network_usage' | 'storage_shortage' | 'other';
   device?: string;
   message?: string;
 }

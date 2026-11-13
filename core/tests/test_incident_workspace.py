@@ -1,11 +1,28 @@
 from datetime import datetime, timedelta, timezone
 from secrets import token_hex
 
+import pytest
+
+from zaddesh_core.api.v1.incidents import zabbix_category
 from zaddesh_core.config import settings
 from zaddesh_core.incidents import redact, utc_now
 from zaddesh_core.models.alerts import Alert, Event, MaintenanceWindow
 from zaddesh_core.models.checks import Check
 from zaddesh_core.models.infrastructure import Device
+
+
+@pytest.mark.parametrize(("title", "host", "category"), [
+    ("High CPU utilization", "Core", "cpu_usage"),
+    ("High memory utilization", "Core", "memory_usage"),
+    ("Interface Te1/0/1: High bandwidth usage", "Core", "network_usage"),
+    ("C: Disk space is critically low", "Core", "storage_shortage"),
+    ("Interface Ethernet 2: Link down", "Backup Server", "link_down"),
+    ("Interface TenGigabitEthernet1/0/1: Link down", "Core Switch", "link_down"),
+    ("Interface Gi0/35(-->Data_Ports<--): Link down", "Core Switch", "other"),
+    ("Ethernet has changed to lower speed than it was before", "Core Switch", "other"),
+])
+def test_zabbix_critical_classification(title, host, category):
+    assert zabbix_category(title, host) == category
 
 
 def test_incident_lifecycle_including_buffered_flaps(client, admin_headers, viewer_headers, monkeypatch):
@@ -104,7 +121,12 @@ def test_critical_categories_and_alert_cleanup(client, db_session, admin_headers
         return alert
 
     down = add("Availability: Offline ping", timedelta(minutes=10), icmp)
-    link = add("Link Down: switch · Gi0/1", timedelta(minutes=2))
+    link = add("Link Down: switch · TenGigabitEthernet1/1", timedelta(minutes=2))
+    access = add("Link Down: switch · Gi0/1", timedelta(minutes=2))
+    server = add("Link Down: Windows Server NIC", timedelta(minutes=2))
+    resource_titles = {"cpu_usage": "High CPU utilization", "memory_usage": "High RAM usage",
+                       "network_usage": "High bandwidth usage", "storage_shortage": "Disk space is critically low"}
+    resources = {category: add(title, timedelta(minutes=2)) for category, title in resource_titles.items()}
     probe = add("Availability: Web test", timedelta(minutes=2), http)
     noise = add("Client disconnected", timedelta(minutes=3))
     old = add("Uplink down", timedelta(hours=8, minutes=1))
@@ -121,16 +143,19 @@ def test_critical_categories_and_alert_cleanup(client, db_session, admin_headers
         assert response.status_code == 200
         return {row["id"] for row in response.json()["alerts"]}
 
-    assert ids("current", "&category=critical") == {down.id, link.id}
+    critical = {down.id, link.id, server.id, *(alert.id for alert in resources.values())}
+    assert ids("current", "&category=critical") == critical
     assert ids("current", "&category=device_offline") == {down.id}
-    assert ids("current", "&category=link_down") == {link.id}
-    assert ids("current") == {down.id, link.id, probe.id}
+    assert ids("current", "&category=link_down") == {link.id, server.id}
+    for category, alert in resources.items():
+        assert ids("current", f"&category={category}") == {alert.id}
+    assert ids("current") == critical | {probe.id, access.id}
     assert ids("history") == {old.id, resolved.id}
     assert noise.id in {row["id"] for row in client.get(base + "/alerts", headers=viewer_headers).json()["alerts"]}
     events = client.get(base + "/events?hide_connection_noise=true&errors_only=true", headers=viewer_headers).json()["events"]
     assert [row["title"] for row in events] == ["Uplink down"]
     count = client.get(base + "/alerts?view=current&category=critical&include_count=true&limit=1", headers=viewer_headers).json()
-    assert count["total"] == 2
+    assert count["total"] == len(critical)
 
     def at(delta):
         return (now - delta).replace(tzinfo=timezone.utc).isoformat()
@@ -141,8 +166,8 @@ def test_critical_categories_and_alert_cleanup(client, db_session, admin_headers
                        json={"start": payload["end"], "end": payload["start"]}).status_code == 422
     assert client.post(base + "/alerts/dismiss", headers=admin_headers, json=payload).json() == {"removed": 1}
     assert client.post(base + "/alerts/dismiss", headers=admin_headers, json=payload).json() == {"removed": 0}
-    assert ids("current", "&category=critical") == {link.id}
+    assert ids("current", "&category=critical") == critical - {down.id}
     assert client.get(f"{base}/alerts/{down.id}", headers=viewer_headers).status_code == 200
     down.triggered_at = now
     db_session.commit()
-    assert ids("current", "&category=critical") == {down.id, link.id}
+    assert ids("current", "&category=critical") == critical

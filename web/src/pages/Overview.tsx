@@ -122,7 +122,7 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
     { label: 'Healthy', value: stats?.up, icon: CircleCheck, tone: 'up', hint: 'Available devices', action: onNavigateToDevices },
     { label: 'Needs attention', value: stats ? issue : undefined, icon: TriangleAlert, tone: 'warning', hint: 'Down or degraded', action: onNavigateToDevices },
     { label: incidentLabel, value: incidentData?.total, icon: Bell, tone: 'down',
-      hint: incidentData?.incomplete ? 'Some incident data is unavailable' : criticalOnly ? 'Offline and link incidents' : 'Unacknowledged alerts', action: onNavigateToAlerts },
+      hint: incidentData?.incomplete ? 'Some incident data is unavailable' : criticalOnly ? 'Availability and resource incidents' : 'Unacknowledged alerts', action: onNavigateToAlerts },
   ];
 
   return (

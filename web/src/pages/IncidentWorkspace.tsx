@@ -18,7 +18,7 @@ type Row = {
   id: number; title: string; severity: string; status: string; suppression?: string;
   started_at: string; resolved_at?: string; duration_seconds: number; occurrences: number;
   flapping: boolean; device: string; device_id: number; check?: string; site?: string;
-  category: 'device_offline' | 'link_down' | 'other';
+  category: 'device_offline' | 'link_down' | 'cpu_usage' | 'memory_usage' | 'network_usage' | 'storage_shortage' | 'other';
 };
 type Event = { id: number; device_id?: number; title: string; message?: string; timestamp: string; severity: string; type: string; details: object };
 type Detail = Row & {
@@ -246,7 +246,8 @@ export function IncidentWorkspace({ initialTab = 'critical' }: { initialTab?: Ta
         {!eventView && field('q', 'Search')}
         {tab !== 'critical' && field('severity', 'Severity', (tab === 'errors' ? ['emergency', 'alert', 'critical', 'error', 'high']
           : tab === 'logs' ? [...logSeverities] : [...logSeverities, 'high', 'average']).map(level => [level, level]))}
-        {tab === 'critical' && field('category', 'Category', [['device_offline', 'Device offline'], ['link_down', 'Uplink or downlink down']])}
+        {tab === 'critical' && field('category', 'Category', [['device_offline', 'Device offline'], ['link_down', 'Server link or TenGig uplink down'],
+          ['cpu_usage', 'High CPU'], ['memory_usage', 'High RAM'], ['network_usage', 'High network usage'], ['storage_shortage', 'Storage shortage']])}
         {tab === 'logs' ? field('source', 'Source') : field('device_id', 'Device', devices.map(device => [String(device.id), device.name]))}
         {eventView && field('type', 'Event type')}
         {alertView && <>
