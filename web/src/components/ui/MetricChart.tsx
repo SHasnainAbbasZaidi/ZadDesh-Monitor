@@ -6,6 +6,7 @@ export interface MetricChartProps {
   data?: MetricPoint[];
   channels?: MetricChannel[];
   range?: { start: number; end: number };
+  failureBucketSeconds?: number;
   color?: string;
   height?: number;
   intervalSeconds?: number;

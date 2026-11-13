@@ -22,23 +22,12 @@ const health = [
   { key: 'unmanaged', label: 'Unmanaged', icon: Server },
 ] as const;
 
-function FleetRing({ stats }: { stats?: DeviceStats }) {
+function FleetDistribution({ stats }: { stats?: DeviceStats }) {
   const total = stats?.total_devices ?? 0;
-  let offset = 0;
   return (
-    <div className="dash-ring" aria-hidden="true">
-      <svg viewBox="0 0 120 120">
-        <circle className="dash-ring-track" cx="60" cy="60" r="52" />
-        {stats && total > 0 && health.map(({ key }) => {
-          const length = 100 * stats[key] / total;
-          const start = offset;
-          offset += length;
-          return length > 0 && <circle key={key} data-tone={key} className="dash-ring-segment"
-            cx="60" cy="60" r="52" pathLength="100" transform="rotate(-90 60 60)"
-            strokeDasharray={`${length} ${100 - length}`} strokeDashoffset={-start} />;
-        })}
-      </svg>
-      <div><strong>{stats ? total.toLocaleString() : '—'}</strong><span>devices</span></div>
+    <div className="dash-fleet-distribution" aria-hidden="true">
+      {stats && total > 0 && health.map(({ key }) => stats[key] > 0 &&
+        <span key={key} data-tone={key} style={{ flexGrow: stats[key] }} />)}
     </div>
   );
 }
@@ -126,22 +115,21 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
   const sites = new Map(snapshot?.sites.map(site => [site.id, site.name]));
   const visibleDevices = devices.filter(device => siteFilter === 'all' || String(device.site_id ?? 'unassigned') === siteFilter);
   const live = !paused && !failed && connection === 'connected';
+  const healthyShare = stats && total ? `${new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(stats.up / total)} healthy` : undefined;
 
   const statCards = [
     { label: 'Total devices', value: stats?.total_devices, icon: Server, tone: 'accent', hint: 'Combined inventory', action: onNavigateToDevices },
     { label: 'Healthy', value: stats?.up, icon: CircleCheck, tone: 'up', hint: 'Available devices', action: onNavigateToDevices },
     { label: 'Needs attention', value: stats ? issue : undefined, icon: TriangleAlert, tone: 'warning', hint: 'Down or degraded', action: onNavigateToDevices },
     { label: incidentLabel, value: incidentData?.total, icon: Bell, tone: 'down',
-      hint: incidentData?.incomplete ? 'Some incident data is unavailable' : criticalOnly ? 'Current outages' : 'Unacknowledged alerts', action: onNavigateToAlerts },
+      hint: incidentData?.incomplete ? 'Some incident data is unavailable' : criticalOnly ? 'Offline and link incidents' : 'Unacknowledged alerts', action: onNavigateToAlerts },
   ];
 
   return (
     <div className="network-dashboard">
       <header className="dash-top">
         <div>
-          <p className="dash-kicker"><Network size={14} /> Network monitoring</p>
           <h1>Infrastructure overview</h1>
-          <p className="ops-muted">Device health, probe performance, and incidents.</p>
         </div>
         <div className="dash-toolbar">
           <span className="dash-live" data-live={live}>
@@ -172,7 +160,8 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
         {statCards.map(({ label, value, icon: Icon, tone, hint, action }) => {
           const Item = action ? 'button' : 'div';
           return <Item type={action ? 'button' : undefined} className="dash-stat" data-tone={tone} key={label} onClick={action}>
-            <span className="dash-stat-label"><span className="dash-stat-icon"><Icon size={16} /></span>{label}</span>
+            <span className="dash-stat-label">{label}</span>
+            <span className="dash-stat-icon" aria-hidden="true"><Icon size={19} /></span>
             <RollingCount value={value} />
             <span className="dash-stat-foot">{hint}{action && <ArrowRight size={14} aria-hidden="true" />}</span>
           </Item>;
@@ -182,18 +171,17 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
       <div className="dash-grid">
         <OverviewLatency minutes={minutes} updatedAt={snapshot?.received.getTime()} />
 
-        <section className="dash-panel" aria-labelledby="fleet-title">
+        <section className="dash-panel dash-fleet-panel" aria-labelledby="fleet-title">
           <header className="dash-panel-head"><div><h2 id="fleet-title"><Network size={16} /> Fleet health</h2><p>Current device status from ZadDesh and Zabbix</p></div></header>
           <div className="dash-panel-body">
-            <div className="dash-fleet">
-              <FleetRing stats={stats} />
+            {healthyShare && <div className="dash-fleet-share"><strong>{healthyShare}</strong><span>{total.toLocaleString()} devices</span></div>}
+            <FleetDistribution stats={stats} />
               <dl className="dash-legend">
                 {health.map(({ key, label, icon: Icon }) => <div key={key}>
-                  <dt><Icon size={15} data-tone={key} />{label}</dt>
+                  <dt><Icon size={15} data-tone={key} aria-hidden="true" />{label}</dt>
                   <dd>{stats?.[key].toLocaleString() ?? '—'}</dd>
                 </div>)}
               </dl>
-            </div>
             <div className="dash-fleet-foot" role="status">
               <h2>{!stats ? (fleetFailed ? 'Health unavailable' : 'Loading health') : !total ? 'No devices configured' : issue ? `${issue} ${issue === 1 ? 'needs' : 'need'} attention` : stats.up ? 'No reported degradation' : 'Awaiting device checks'}</h2>
               <p>{fleetFailed ? (fleet?.zabbix_unavailable ? 'Zabbix is unavailable. Showing local device status.'

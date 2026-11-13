@@ -126,11 +126,17 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 768, height: 1024 
       status = 503;
       const failureStart = performance.now();
       await sample();
-      await expect(latency.getByRole('list', { name: 'Devices with outages' })).toContainText(name);
+      const failingProbes = latency.getByText('1 device failing HTTP(S) probes', { exact: true });
+      await expect(failingProbes).toBeVisible();
+      await expect(latency.getByRole('list', { name: 'Devices with outages' })).toBeHidden();
+      await failingProbes.click();
+      await latency.getByRole('list', { name: 'Devices with outages' }).getByRole('button', { name }).click();
+      await expect(chooser).toHaveValue(String(device.id));
+      await chooser.selectOption('all');
       // Fleet health polls independently. Exercise the existing manual refresh after the live chart updates.
       await page.getByRole('button', { name: 'Refresh dashboard' }).click();
       await expect(page.getByRole('heading', { name: '1 needs attention' })).toBeVisible();
-      await expect(latency.getByText('× Failed probes', { exact: true })).toBeVisible();
+      await expect(latency.getByText('Failed probes', { exact: true })).toBeVisible();
       const failureCsv = page.waitForEvent('download');
       await latency.getByRole('button', { name: /Export .* CSV/ }).click();
       expect(await readFile(await (await failureCsv).path(), 'utf8')).toContain(`"${name}",,probe failed`);

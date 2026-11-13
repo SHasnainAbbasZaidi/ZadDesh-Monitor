@@ -14,7 +14,7 @@ function csvName(value: string) {
   return '"' + (/^[\s=+@-]/.test(value) ? "'" : '') + value.replace(/"/g, '""') + '"';
 }
 
-export default function MetricPlot({ title, unit, data, channels, range, color, height, intervalSeconds, annotations }: MetricChartProps) {
+export default function MetricPlot({ title, unit, data, channels, range, failureBucketSeconds, color, height, intervalSeconds, annotations }: MetricChartProps) {
   const host = useRef<HTMLDivElement>(null);
   const chart = useRef<EChartsType | null>(null);
   const { theme } = useTheme();
@@ -41,8 +41,14 @@ export default function MetricPlot({ title, unit, data, channels, range, color, 
       max: range?.end ?? (times.length ? Math.max(...times, ...sampleTimes) : undefined), axisLabel, axisLine: { lineStyle: { color: line } } };
     const outages = channels?.filter(channel => channel.failures.length) ?? [];
     const hasOutages = outages.length > 0;
-    const outageLanes = Math.min(outages.length, 3);
-    const outageHeight = Math.max(18, outageLanes * 10);
+    const outageHeight = 16;
+    const failureTimes = new Map<number, number>();
+    const bucketMs = Math.max(1, failureBucketSeconds ?? 0) * 1000;
+    for (const plot of outages) {
+      const buckets = new Set(plotPoints(plot.failures).map(([time]) => Math.floor(time / bucketMs) * bucketMs));
+      for (const time of buckets) failureTimes.set(time, (failureTimes.get(time) ?? 0) + 1);
+    }
+    const failureColor = getComputedStyle(document.documentElement).getPropertyValue('--ops-down').trim();
     const plots = channels ?? [{ id: 0, name: title, data: data ?? [], color, intervalSeconds }];
     chart.current?.setOption({
       animation: false,
@@ -57,7 +63,7 @@ export default function MetricPlot({ title, unit, data, channels, range, color, 
       xAxis: hasOutages ? [{ ...xAxis, axisLabel: { show: false } }, { ...xAxis, gridIndex: 1 }] : [xAxis],
       yAxis: [
         { type: 'value', axisLabel, splitLine: { lineStyle: { color: line } }, scale: true },
-        ...(hasOutages ? [{ type: 'value', gridIndex: 1, min: 0, max: outageLanes + 1, show: false }] : []),
+        ...(hasOutages ? [{ type: 'value', gridIndex: 1, min: 0, max: 2, show: false }] : []),
       ],
       dataZoom: [{ type: 'inside', xAxisIndex: hasOutages ? [0, 1] : [0], zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: false }],
       series: [
@@ -68,15 +74,18 @@ export default function MetricPlot({ title, unit, data, channels, range, color, 
           ...(channels ? {} : { areaStyle: { opacity: 0.08 } }),
           ...(markers ? { markLine: { symbol: 'none', label: { formatter: '{b}', color: ink }, data: markers } } : {}),
         })),
-        ...outages.map((plot, index) => ({
-          id: `failure-${plot.id}`, name: `${plot.name} · Probe failed`, type: 'scatter', xAxisIndex: 1, yAxisIndex: 1,
-          data: plotPoints(plot.failures).map(([time]) => [time, index % outageLanes + 1]),
-          itemStyle: { color: plot.color }, symbol: 'path://M0 1 L1 0 L5 4 L9 0 L10 1 L6 5 L10 9 L9 10 L5 6 L1 10 L0 9 L4 5 Z',
-          symbolSize: 9, tooltip: { trigger: 'item', valueFormatter: () => 'Probe failed' },
-        })),
+        ...(hasOutages ? [{
+          id: 'probe-failures', name: 'Failed probes', type: 'scatter', xAxisIndex: 1, yAxisIndex: 1,
+          data: Array.from(failureTimes, ([time, count]) => ({
+            name: `${new Date(Math.max(time, range?.start ?? time)).toLocaleString()} · ${count} ${count === 1 ? 'device' : 'devices'} with failed probes`,
+            value: [Math.max(time, range?.start ?? time), 1],
+          })),
+          itemStyle: { color: failureColor, opacity: .85 }, symbol: 'rect', symbolSize: [2, 10],
+          tooltip: { trigger: 'item', formatter: '{b}' },
+        }] : []),
       ],
     }, { replaceMerge: ['series', 'grid', 'xAxis', 'yAxis'] });
-  }, [title, unit, data, channels, range, color, theme, intervalSeconds, annotations]);
+  }, [title, unit, data, channels, range, failureBucketSeconds, color, theme, intervalSeconds, annotations]);
 
   const download = (url: string, suffix: string) => {
     const link = document.createElement('a');

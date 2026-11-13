@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity } from 'lucide-react';
+import { Activity, ChevronRight, CircleAlert } from 'lucide-react';
 import { Badge } from './Badge';
 import { MetricChart } from './MetricChart';
 import { api } from '../../services/api';
@@ -57,12 +57,12 @@ export function OverviewLatency({ minutes, updatedAt }: { minutes: number; updat
   const reporting = channels.filter(channel => channel.data.length).length;
   const hasOutages = channels.some(channel => channel.failures.length);
   const failedProbes = new Set(current?.channels.filter(channel => channel.probe_down).map(channel => channel.device_id));
-  const down = displayed.filter(device => device.status === 'down' || failedProbes.has(device.id));
+  const down = displayed.filter(device => failedProbes.has(device.id));
 
   return (
     <section className="dash-panel dash-latency" aria-labelledby="latency-heading">
       <header className="dash-panel-head">
-        <div><h2 id="latency-heading"><Activity size={16} /> Probe latency</h2></div>
+        <div><h2 id="latency-heading"><Activity size={16} aria-hidden="true" /> Probe latency</h2></div>
         <div className="dash-latency-selects">
           <select aria-label="Latency device" className="dash-select" value={selection} onChange={event => setSelection(event.target.value)}>
             <option value="all">All Devices</option>
@@ -76,7 +76,7 @@ export function OverviewLatency({ minutes, updatedAt }: { minutes: number; updat
       <div className="dash-panel-body">
         {error && <p role="alert" className="mb-2 text-sm ops-muted">{error}</p>}
         {reporting > 0 && current ? <MetricChart title={protocols[protocol] + ' latency'} unit="ms" channels={channels}
-          range={{ start: Date.parse(current.start), end: Date.parse(current.end) }} height={260} />
+          range={{ start: Date.parse(current.start), end: Date.parse(current.end) }} failureBucketSeconds={current.bucket_seconds} height={280} />
           : <div className="dash-chart-empty" role="status">
             <Activity size={25} />
             <strong>{error ? 'Telemetry unavailable' : !current ? 'Loading telemetry' : !devices.length ? 'No devices configured' : 'No samples in this range'}</strong>
@@ -86,10 +86,13 @@ export function OverviewLatency({ minutes, updatedAt }: { minutes: number; updat
           <span>{displayed.length} {displayed.length === 1 ? 'device' : 'devices'} · {reporting} reporting</span>
           {reporting > 0 && <span>Peak per {current.bucket_seconds}s</span>}
           {selection !== 'all' && <Badge status={displayed[0].status} />}
-          {hasOutages && <span>× Failed probes</span>}
-          {down.length > 0 && <ul aria-label="Devices with outages" className="dash-latency-outages">
-            {down.map(device => <li key={device.id}><Badge status="down">{device.status === 'down' ? 'Down' : 'Probe failed'}</Badge> {deviceLabel(device)}</li>)}
-          </ul>}
+          {hasOutages && <span className="dash-failure-key"><i aria-hidden="true" /> Failed probes</span>}
+          {down.length > 0 && <details className="dash-probe-failures">
+            <summary><CircleAlert size={16} aria-hidden="true" /><strong>{down.length} {down.length === 1 ? 'device' : 'devices'} failing {protocols[protocol]} probes</strong><ChevronRight size={15} aria-hidden="true" /></summary>
+            <ul aria-label="Devices with outages" className="dash-latency-outages">
+              {down.map(device => <li key={device.id}><button type="button" className="ops-button" onClick={() => setSelection(String(device.id))}>{deviceLabel(device)}</button></li>)}
+            </ul>
+          </details>}
         </footer>}
       </div>
     </section>
