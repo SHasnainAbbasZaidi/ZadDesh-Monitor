@@ -127,7 +127,7 @@ test('add-on workspace and published diagram access', async ({ page, request }) 
   })).status()).toBe(204);
   await expect(page.getByRole('img', { name: 'Network diagram with 2 nodes and 1 links' })).toBeVisible();
   const workspace = page.getByRole('region', { name: 'Topology workspace' });
-  await expect(workspace.getByLabel('Layout', { exact: true })).toHaveValue('expanded');
+  await expect(workspace.getByRole('combobox', { name: /^Layout/ })).toHaveValue('expanded');
   await expect(workspace.getByRole('region', { name: 'Scrollable topology canvas' })).toBeVisible();
   await workspace.getByRole('button', { name: 'Zoom in' }).click();
   await expect(workspace.getByRole('button', { name: 'Actual size' })).toHaveText('125%');
