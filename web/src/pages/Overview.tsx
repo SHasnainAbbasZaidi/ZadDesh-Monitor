@@ -206,14 +206,14 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
               </select>
               <span className="ops-muted text-xs">{visibleDevices.length} shown</span>
             </div>}
-            {visibleDevices.length ? <div className="dash-table-scroll"><table className="dash-table">
+            {visibleDevices.length ? <table className="dash-table dash-inventory-table">
               <thead><tr><th scope="col">Device</th><th scope="col">Site</th><th scope="col">Status</th></tr></thead>
               <tbody>{visibleDevices.map(device => <tr key={device.id}>
                 <td><strong>{device.name}</strong><span className="font-mono">{device.ip}</span></td>
                 <td>{sites.get(device.site_id ?? -1) ?? 'Unassigned'}</td>
                 <td><Badge status={device.status}>{device.status_label ?? (device.status === 'unknown' ? 'No availability data' : device.status)}</Badge></td>
               </tr>)}</tbody>
-            </table></div> : <div className="dash-empty">
+            </table> : <div className="dash-empty">
               <Server size={21} /><strong>{fleet ? devices.length ? 'No devices in this site' : 'Your inventory is empty'
                 : fleetFailed ? 'Device inventory unavailable' : 'Waiting for device inventory'}</strong>
               {onNavigateToDevices && fleet && !devices.length && <button className="ops-button" onClick={onNavigateToDevices}>Open Devices</button>}

@@ -187,13 +187,19 @@ button.dash-stat:hover { border-color: var(--tone); }
 .dash-fleet-foot { border-top: 1px solid var(--ops-line); margin-top: .9rem; padding-top: .75rem; }
 .dash-fleet-foot h2 { font-weight: 680; font-size: .88rem; }
 .dash-fleet-foot p { color: var(--ops-muted); font-size: .72rem; margin-top: .25rem; }
-.dash-table-scroll { overflow-x: auto; border: 1px solid var(--ops-line); border-radius: .6rem; }
 .dash-table { width: 100%; border-collapse: collapse; text-align: left; font-size: .76rem; }
 .dash-table th { background: var(--ops-subtle); color: var(--ops-muted); font-weight: 650; position: sticky; top: 0; }
 .dash-table th, .dash-table td { padding: .55rem .65rem; border-bottom: 1px solid var(--ops-line); }
 .dash-table td:first-child span { display: block; color: var(--ops-muted); font-size: .68rem; overflow-wrap: anywhere; }
 .dash-table td:last-child { white-space: nowrap; }
 .dash-table tr:last-child td { border-bottom: 0; }
+.dash-inventory-table { table-layout: fixed; }
+.dash-inventory-table th { position: static; }
+.dash-inventory-table th:first-child { width: 48%; }
+.dash-inventory-table th:last-child { width: 30%; }
+.dash-inventory-table td { overflow-wrap: anywhere; }
+.dash-inventory-table td:last-child { white-space: normal; }
+.dash-inventory-table td:last-child > span { max-width: 100%; }
 .dash-feed li { display: flex; align-items: start; justify-content: space-between; gap: .65rem; padding: .65rem 0; font-size: .78rem; }
 .dash-feed li + li { border-top: 1px solid var(--ops-line); }
 .dash-feed li:first-child { padding-top: 0; }
