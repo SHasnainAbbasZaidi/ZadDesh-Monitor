@@ -81,7 +81,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="flex items-center gap-1.5 md:gap-3">
                 <Icon className="w-4 h-4" />
                 <span className="text-xs md:text-sm">{item.label}</span>
-                {item.id === 'network-diagram' && <span className="text-[10px] ops-muted">Beta</span>}
               </div>
               {item.badge && (
                 <span
