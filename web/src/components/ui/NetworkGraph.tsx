@@ -4,6 +4,7 @@ import { GraphChart } from 'echarts/charts';
 import { TooltipComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import { useTheme } from '../../context/ThemeContext';
+import { expandedLayout } from './topologyLayout';
 
 use([GraphChart, TooltipComponent, CanvasRenderer]);
 
@@ -21,6 +22,7 @@ const nodeIcons: Record<string, string> = {
 const statusColors: Record<string, string> = { up: '#22c55e', down: '#ef4444', warning: '#f59e0b' };
 
 export function positionsFor(diagram: Diagram) {
+  if (diagram.layout.mode === 'expanded') return { ...expandedLayout(diagram).positions, ...diagram.layout.positions };
   const levels = new Map<number, number>();
   const adjacency = new Map<number, number[]>();
   for (const link of diagram.links) {

@@ -54,7 +54,7 @@ class DiagramCreate(BaseModel):
 
 class DiagramUpdate(BaseModel):
     published: bool | None = None
-    layout: Literal["hierarchical", "force", "site", "subnet"] | None = None
+    layout: Literal["hierarchical", "force", "site", "subnet", "expanded"] | None = None
     positions: dict[int, tuple[float, float]] | None = Field(default=None, max_length=2000)
 
 

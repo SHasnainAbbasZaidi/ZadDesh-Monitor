@@ -3,6 +3,7 @@ import { Cable, Focus, Lock, LockOpen, Network, Search, Server } from 'lucide-re
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import type { Diagram } from '../components/ui/NetworkGraph';
+import { ExpandedTopology } from '../components/ui/ExpandedTopology';
 import { api, request } from '../services/api';
 import { useAddonUpdates } from '../services/addonUpdates';
 import type { Check, Site } from '../types';
@@ -40,6 +41,8 @@ export default function NetworkDiagram() {
   const [locked, setLocked] = useState(true);
   const [positions, setPositions] = useState<Record<string, [number, number]>>({});
   const [fit, setFit] = useState(0);
+  const [expanded, setExpanded] = useState(true);
+  const mapSvg = useRef<SVGSVGElement>(null);
   const choseDiagram = useRef(false);
   const png = useRef<() => string>();
   const endpoint = `/network-diagram/${id}`;
@@ -90,6 +93,28 @@ export default function NetworkDiagram() {
   useEffect(() => { if (locked) editingGraph.current = undefined; }, [locked]);
   const canvasGraph = !locked && editingGraph.current?.id === id ? editingGraph.current : activeGraph;
 
+  function exportExpanded(format: 'svg' | 'png') {
+    if (!mapSvg.current) return;
+    const svg = mapSvg.current.cloneNode(true) as SVGSVGElement;
+    svg.setAttribute('width', String(mapSvg.current.viewBox.baseVal.width));
+    svg.setAttribute('height', String(mapSvg.current.viewBox.baseVal.height));
+    const theme = getComputedStyle(mapSvg.current);
+    const markup = new XMLSerializer().serializeToString(svg).replace(/var\((--ops-[\w-]+)\)/g, (_, name) => theme.getPropertyValue(name).trim());
+    const blob = new Blob([markup], { type: 'image/svg+xml' });
+    if (format === 'svg') { download('network-diagram.svg', blob); return; }
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width; canvas.height = img.height;
+      canvas.getContext('2d')?.drawImage(img, 0, 0);
+      canvas.toBlob(value => { if (value) download('network-diagram.png', value); });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); setError('Could not export the diagram as PNG.'); };
+    img.src = url;
+  }
+
   return <section className="space-y-4">
     <h1 className="ops-heading">Network Diagram</h1>
     {error && <p className="ops-notice" role="alert">{error}</p>}
@@ -131,9 +156,11 @@ export default function NetworkDiagram() {
       <div className="topology-toolbar">
         <div className="min-w-0 mr-auto"><h2 className="flex items-center gap-2 font-semibold"><Network size={17} aria-hidden="true" />{activeGraph.name}</h2>
           <p className="ops-muted text-xs mt-1">{activeGraph.nodes.length} devices · {activeGraph.links.length} links</p></div>
-        <label className="text-xs">Layout<select className="dash-select block" value={activeGraph.layout.mode ?? 'hierarchical'} onChange={e => {
-          setPositions({}); void mutate(endpoint, 'PATCH', { layout: e.target.value, positions: {} });
-        }}>{layouts.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label className="text-xs">Layout<select className="dash-select block" disabled={!locked} value={expanded ? 'expanded' : activeGraph.layout.mode ?? 'hierarchical'} onChange={async e => {
+          const mode = e.target.value;
+          if (mode === 'expanded') setExpanded(true);
+          else if (mode === activeGraph.layout.mode || await mutate(endpoint, 'PATCH', { layout: mode, positions: {} })) setExpanded(false);
+        }}><option value="expanded">Expanded device map</option>{layouts.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <button className="ops-button" onClick={() => {
           if (locked) editingGraph.current = activeGraph;
           if (!locked && Object.keys(positions).length && !window.confirm('Discard unsaved node positions?')) return;
@@ -142,20 +169,26 @@ export default function NetworkDiagram() {
         }}>{locked ? <Lock size={14} /> : <LockOpen size={14} />}{locked ? 'Unlock layout' : 'Lock layout'}</button>
         <button className="ops-button" disabled={!Object.keys(positions).length}
           onClick={async () => {
-            if (await mutate(endpoint, 'PATCH', { positions: { ...activeGraph.layout.positions, ...positions } })) {
+            const layout = expanded ? 'expanded' : activeGraph.layout.mode ?? 'hierarchical';
+            const saved = activeGraph.layout.mode === layout ? activeGraph.layout.positions : {};
+            if (await mutate(endpoint, 'PATCH', { layout, positions: { ...saved, ...positions } })) {
               setPositions({}); setLocked(true);
             }
           }}>Save layout</button>
-        <button className="ops-button" onClick={() => setFit(value => value + 1)}><Focus size={14} />Fit to screen</button>
+        {!expanded && <button className="ops-button" onClick={() => setFit(value => value + 1)}><Focus size={14} />Fit to screen</button>}
         <button className="ops-button" onClick={() => void mutate(endpoint, 'PATCH', { published: !activeGraph.published })}>{activeGraph.published ? 'Unpublish' : 'Publish'}</button>
         <button className="ops-button" onClick={() => download('network-diagram.json', new Blob([JSON.stringify(activeGraph, null, 2)], { type: 'application/json' }))}>JSON</button>
         <button className="ops-button" disabled={!activeGraph.nodes.length} onClick={async () => {
+          if (expanded) { exportExpanded('svg'); return; }
           const { svgFor } = await import('../components/ui/NetworkGraph');
           download('network-diagram.svg', new Blob([svgFor(activeGraph)], { type: 'image/svg+xml' }));
         }}>SVG</button>
-        <button className="ops-button" disabled={!activeGraph.nodes.length} onClick={() => { if (png.current) download('network-diagram.png', png.current()); }}>PNG</button>
+        <button className="ops-button" disabled={!activeGraph.nodes.length} onClick={() => {
+          if (expanded) exportExpanded('png');
+          else if (png.current) download('network-diagram.png', png.current());
+        }}>PNG</button>
       </div>
-      <div className="topology-workbench">
+      <div className={`topology-workbench${expanded ? ' topology-workbench-expanded' : ''}`}>
         <aside className="topology-devices" aria-label="Diagram devices">
           <label className="block text-sm font-semibold" htmlFor="topology-find">Devices</label>
           <div className="relative mt-2"><Search size={14} className="absolute left-2 top-2.5 ops-muted" aria-hidden="true" />
@@ -168,7 +201,10 @@ export default function NetworkDiagram() {
           {!visible?.length && <p className="ops-muted text-xs mt-3">{search ? 'No matching devices' : 'No devices on this diagram'}</p>}
         </aside>
         <div className="topology-canvas">
-      {activeGraph.nodes.length ? <Suspense fallback={<p role="status">Loading diagram…</p>}>
+      {activeGraph.nodes.length && expanded ? <ExpandedTopology key={id} diagram={canvasGraph ?? activeGraph} selected={selection}
+        locked={locked} positions={positions} svgRef={mapSvg} onSelect={(kind, item) => setSelection({ kind, id: item })}
+        onMove={(node, point) => setPositions(previous => ({ ...previous, [node]: point }))} />
+        : activeGraph.nodes.length ? <Suspense fallback={<p role="status">Loading diagram…</p>}>
         <Graph key={`${id}:${fit}`} diagram={canvasGraph ?? activeGraph} draggable={!locked} onSelect={(kind, item) => setSelection({ kind, id: item })}
           onMove={!locked ? (node, point) => setPositions(previous => ({ ...previous, [node]: point })) : undefined}
           selectedNodeId={selectedNode?.id} height={610} exportGraph={exporter => { png.current = exporter; }} />
