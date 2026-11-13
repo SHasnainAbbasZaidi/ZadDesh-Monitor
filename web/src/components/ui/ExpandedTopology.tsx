@@ -62,11 +62,14 @@ export function ExpandedTopology({ diagram, selected, locked, positions, onSelec
           const path = vertical ? `M${x1} ${y1} C${x1} ${mid} ${x2} ${mid} ${x2} ${y2}` : `M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}`;
           const active = selected?.kind === 'edge' && selected.id === link.id;
           const connected = selected?.kind === 'node' && (selected.id === link.source || selected.id === link.target);
+          const uplink = layout.groupByNode.get(link.source) !== layout.groupByNode.get(link.target) && link.speed === 10_000_000_000;
+          const offset = uplink ? ((link.id % 7) - 3) * 7 : 0;
+          const cable = uplink && vertical ? `M${x1 + offset} ${y1} C${x1 + offset} ${mid} ${x2 + offset} ${mid} ${x2 + offset} ${y2}` : path;
           const color = link.status === 'down' ? 'var(--ops-down)' : link.utilization != null && link.utilization >= 80 ? 'var(--ops-warning)' : 'var(--ops-accent)';
           return <g key={link.id} onClick={() => onSelect('edge', link.id)} className="cursor-pointer">
             <title>{link.source_port} ↔ {link.target_port} · {link.status}</title>
-            <path d={path} fill="none" stroke={color} opacity={active || connected ? 1 : .48} strokeWidth={active || connected ? 3 : 1.6} strokeDasharray={link.status === 'down' ? '6 4' : undefined} />
-            <path d={path} fill="none" stroke="transparent" strokeWidth="14" />
+            <path d={cable} fill="none" stroke={color} opacity={active || connected || uplink ? 1 : .48} strokeWidth={active || connected || uplink ? 3 : 1.6} strokeDasharray={link.status === 'down' ? '6 4' : undefined} />
+            <path d={cable} fill="none" stroke="transparent" strokeWidth={uplink ? '7' : '14'} />
           </g>;
         })}
         {diagram.nodes.map(node => {

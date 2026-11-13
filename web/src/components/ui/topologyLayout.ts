@@ -32,6 +32,7 @@ export function expandedLayout(diagram: Diagram) {
     byGroup.set(key, group);
   }
   const positions: Record<number, [number, number]> = {};
+  const groupByNode = new Map<number, string>();
   const zones: { name: string; x: number; y: number; width: number; height: number }[] = [];
   let y = 28;
   for (const [name, group] of byGroup) {
@@ -41,9 +42,10 @@ export function expandedLayout(diagram: Diagram) {
     const zone = { name, x: 28, y, width: columns * stepX + 20, height: Math.ceil(group.length / columns) * stepY + 30 };
     zones.push(zone);
     sorted.forEach((node, index) => {
+      groupByNode.set(node.id, name);
       positions[node.id] = [zone.x + 30 + index % columns * stepX, zone.y + 54 + Math.floor(index / columns) * stepY];
     });
     y += zone.height + 28;
   }
-  return { positions, zones, width: Math.max(300, ...zones.map(zone => zone.x + zone.width + 28)), height: Math.max(320, y) };
+  return { positions, zones, groupByNode, width: Math.max(300, ...zones.map(zone => zone.x + zone.width + 28)), height: Math.max(320, y) };
 }

@@ -243,6 +243,11 @@ button.dash-stat:hover { border-color: var(--tone); }
 .topology-device-list span { min-width: 0; overflow-wrap: anywhere; }
 .topology-device-list small { display: block; color: var(--ops-muted); }
 .topology-inspector label, .topology-inspector input, .topology-inspector select { max-width: 100%; }
+.topology-uplinks { padding: .75rem .9rem; border-bottom: 1px solid var(--ops-line); }
+.topology-uplinks summary { cursor: pointer; color: var(--ops-accent); }
+.topology-uplink-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr)); gap: .5rem; margin-top: .65rem; }
+.topology-uplink-list .ops-button { width: 100%; text-align: left; white-space: normal; }
+.topology-uplink-list .ops-button svg { flex: none; }
 .topology-workbench-expanded .topology-canvas { grid-row: 1; padding: 0; }
 .expanded-topology { position: relative; }
 .expanded-topology-tools { position: absolute; z-index: 1; right: .85rem; top: .65rem; display: flex; gap: .3rem; }

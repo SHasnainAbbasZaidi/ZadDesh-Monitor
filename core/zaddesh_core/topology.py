@@ -171,6 +171,12 @@ def merge_observation(db: Session, diagram_id: int, device: Device, data: dict[s
     for item in known:
         for alias in {item.name.casefold(), (item.hostname or "").casefold(), item.ip.casefold()} - {""}:
             known_names[alias] = item if alias not in known_names else None
+    inventory = {item.id: item for item in known}
+    for item in nodes:
+        alias = str(item.metadata_json.get("sys_name") or "").strip().casefold()
+        identity = inventory.get(item.device_id)
+        if alias and identity and (alias not in known_names or known_names[alias] != identity):
+            known_names[alias] = identity if alias not in known_names else None
 
     def node(label: str, identity: Device | None) -> TopologyNode:
         key = f"device:{identity.id}" if identity else f"neighbor:{label.casefold()}"[:255]
@@ -206,10 +212,11 @@ def merge_observation(db: Session, diagram_id: int, device: Device, data: dict[s
             **{key: interface.get(key) for key in ("status", "speed", "utilization")}, "present": present,
         }}
         old_status = link.status
-        statuses = {item.get("status") for item in evidence.values()}
+        readings = [item for item in evidence.values() if isinstance(item, dict)]
+        statuses = {item.get("status") for item in readings}
         link.status = "down" if "down" in statuses else "up" if "up" in statuses else "unknown"
-        link.speed = min((item["speed"] for item in evidence.values() if item.get("speed")), default=None)
-        link.utilization = max((item["utilization"] for item in evidence.values() if item.get("utilization") is not None), default=None)
+        link.speed = min((item["speed"] for item in readings if item.get("speed")), default=None)
+        link.utilization = max((item["utilization"] for item in readings if item.get("utilization") is not None), default=None)
         link.evidence = evidence
         if old_status != link.status:
             change(db, diagram_id, "link_status", f"{source.label} {port} is {link.status}")
@@ -221,7 +228,7 @@ def merge_observation(db: Session, diagram_id: int, device: Device, data: dict[s
 
     for method, index, local_port, remote_name, remote_port, management in neighbors(data):
         identity = next((known_names[address] for address in management if known_names.get(address)), None)
-        identity = identity or known_names.get(remote_name.casefold())
+        identity = identity or known_names.get(remote_name.strip().casefold())
         if identity is None and not identifiable_neighbor(remote_name):
             continue
         target = node(remote_name, identity)

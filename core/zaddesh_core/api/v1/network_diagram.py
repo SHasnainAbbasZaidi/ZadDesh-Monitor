@@ -98,7 +98,33 @@ def graph(db: Session, item: TopologyDiagram):
     ).order_by(TopologyNode.id).all()
     rows = [(node, device) for node, device in rows if device or node.manual or identifiable_neighbor(node.label)]
     node_ids = {node.id for node, _ in rows}
-    links = db.query(TopologyLink).filter_by(diagram_id=item.id).order_by(TopologyLink.id)
+    aliases: dict[str, list[int]] = {}
+    for node, device in rows:
+        alias = str(node.metadata_json.get("sys_name") or "").strip().casefold()
+        if device and alias:
+            aliases.setdefault(alias, []).append(node.id)
+    canonical = {}
+    for node, device in rows:
+        matches = aliases.get(node.label.strip().casefold(), [])
+        if not device and not node.manual and len(matches) == 1:
+            canonical[node.id] = matches[0]
+    rows = [(node, device) for node, device in rows if node.id not in canonical]
+    link_rows = db.query(TopologyLink).filter_by(diagram_id=item.id).order_by(TopologyLink.manual.desc(), TopologyLink.id)
+    links = {}
+    for link in link_rows:
+        source = canonical.get(link.source_id, link.source_id)
+        target = canonical.get(link.target_id, link.target_id)
+        if source == target or source not in node_ids or target not in node_ids:
+            continue
+        key = link_key(source, link.source_port, target, link.target_port)
+        if key in links:
+            previous = links[key]
+            if (not previous[0].manual and not previous[0].evidence.get("configured_vlans")
+                    and (link.evidence.get("configured_vlans") or
+                         (link.source_id == source and link.target_id == target))):
+                links[key] = link, source, target
+        else:
+            links[key] = link, source, target
     return {"id": item.id, "name": item.name, "published": item.published, "layout": item.layout,
             "automatic": item.automatic_key is not None,
             "nodes": [{"id": node.id, "label": node.label, "device_id": device.id if device else None,
@@ -106,12 +132,13 @@ def graph(db: Session, item: TopologyDiagram):
                        "status": device.status if device else "unmanaged", "alerts": alerts.get(device.id, 0) if device else 0,
                        "kind": node.kind, "manual": node.manual, "interfaces": node.metadata_json.get("interfaces", {})}
                       for node, device in rows],
-            "links": [{"id": link.id, "source": link.source_id, "target": link.target_id,
+            "links": [{"id": link.id, "source": source, "target": target,
                        "source_port": "" if MAC_ID.fullmatch(link.source_port.strip()) else link.source_port,
                        "target_port": "" if MAC_ID.fullmatch(link.target_port.strip()) else link.target_port, "method": link.method,
                        "confidence": "high" if link.method in {"lldp", "cdp"} else "manual",
-                       "status": link.status, "speed": link.speed, "utilization": link.utilization, "manual": link.manual}
-                      for link in links if link.source_id in node_ids and link.target_id in node_ids]}
+                       "status": link.status, "speed": link.speed, "utilization": link.utilization, "manual": link.manual,
+                       "configured_vlans": link.evidence.get("configured_vlans", [])}
+                      for link, source, target in links.values()]}
 
 
 @router.get("/{diagram_id}")
@@ -393,6 +420,7 @@ class ManualLink(BaseModel):
     target: int
     source_port: str = Field("", max_length=255)
     target_port: str = Field("", max_length=255)
+    configured_vlans: list[Annotated[int, Field(ge=1, le=4094)]] | None = Field(None, max_length=4094)
 
 
 @router.put("/{diagram_id}/links/{link_id}", status_code=204)
@@ -404,6 +432,12 @@ def edit_link(diagram_id: int, link_id: int, payload: ManualLink, user: User = D
     item = db.query(TopologyLink).filter_by(diagram_id=diagram_id, id=link_id).first() if link_id else None
     if item is None and link_id:
         raise HTTPException(404, "Link not found")
+    if item is not None and payload.configured_vlans is not None:
+        item.evidence = {**item.evidence, "configured_vlans": sorted(set(payload.configured_vlans))}
+        audit(db, user, "topology.link_vlans_recorded", diagram_id, {"link_id": link_id})
+        db.commit()
+        notify_change()
+        return
     key = link_key(payload.source, payload.source_port, payload.target, payload.target_port)
     duplicate = db.query(TopologyLink).filter_by(diagram_id=diagram_id, key=key).first()
     if duplicate and (item is None or duplicate.id != item.id):
@@ -414,6 +448,8 @@ def edit_link(diagram_id: int, link_id: int, payload: ManualLink, user: User = D
     item.key, item.source_id, item.target_id = key, payload.source, payload.target
     item.source_port, item.target_port = redact(payload.source_port), redact(payload.target_port)
     item.method, item.manual = "manual", True
+    if payload.configured_vlans is not None:
+        item.evidence = {**(item.evidence or {}), "configured_vlans": sorted(set(payload.configured_vlans))}
     audit(db, user, "topology.link_edited", diagram_id, {"link_id": link_id})
     db.commit()
     notify_change()

@@ -14,7 +14,7 @@ export type Diagram = {
   id: number; name: string; published: boolean;
   layout: { mode?: string; positions?: Record<string, [number, number]> };
   nodes: { id: number; label: string; status: string; kind: string; alerts: number; site_id?: number; ip?: string; device_id?: number; manual?: boolean; interfaces?: Record<string, DiagramPort> }[];
-  links: { id: number; source: number; target: number; source_port: string; target_port: string; method: string; confidence: string; status: string; speed?: number; utilization?: number; manual?: boolean }[];
+  links: { id: number; source: number; target: number; source_port: string; target_port: string; method: string; confidence: string; status: string; speed?: number; utilization?: number; manual?: boolean; configured_vlans?: number[] }[];
 };
 const nodeIcons: Record<string, string> = {
   router: 'diamond', switch: 'rect', firewall: 'triangle', ap: 'pin', server: 'roundRect',

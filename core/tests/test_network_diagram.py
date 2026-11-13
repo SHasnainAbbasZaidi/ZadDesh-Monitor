@@ -5,8 +5,9 @@ from zaddesh_core.api.v1.network_diagram import schedule_inventory
 from zaddesh_core.config import settings
 from zaddesh_core.incidents import utc_now
 from zaddesh_core.models.infrastructure import Collector
-from zaddesh_core.models.topology import TopologyRun
+from zaddesh_core.models.topology import TopologyLink, TopologyNode, TopologyRun
 from zaddesh_core.security import hash_token
+from zaddesh_core.topology import link_key
 
 
 def test_discovery_rbac_merge_publication_and_link_recovery(client, db_session, admin_headers, viewer_headers, monkeypatch):
@@ -68,6 +69,20 @@ def test_discovery_rbac_merge_publication_and_link_recovery(client, db_session, 
     assert "00:c8:8b:b9:d0:4e" not in graph.text
     assert graph.json()["links"][0]["confidence"] == "high"
     node_id = next(node["id"] for node in graph.json()["nodes"] if node["device_id"] == first_device)
+    connection = graph.json()["links"][0]
+    peer = db_session.get(TopologyNode, connection["target"])
+    peer.metadata_json = {**peer.metadata_json, "sys_name": "Site_B_C30"}
+    duplicate = TopologyNode(diagram_id=identifier, label="Site_B_C30", key="neighbor:site_b_c30")
+    db_session.add(duplicate)
+    db_session.flush()
+    db_session.add(TopologyLink(diagram_id=identifier, source_id=node_id, target_id=duplicate.id,
+                               source_port="Gi0/1", target_port="Gi0/2", method="lldp",
+                               key=link_key(node_id, "Gi0/1", duplicate.id, "Gi0/2")))
+    db_session.commit()
+    collapsed = client.get(route, headers=admin_headers).json()
+    assert len(collapsed["nodes"]) == 2 and len(collapsed["links"]) == 1
+    assert client.put(f"{route}/links/{connection['id']}", headers=admin_headers,
+                      json={**connection, "configured_vlans": [20, 10, 20]}).status_code == 204
     assert client.put(f"{route}/nodes/{node_id}", headers=admin_headers, json={
         "label": "Edited switch", "kind": "switch",
     }).status_code == 204
@@ -79,6 +94,8 @@ def test_discovery_rbac_merge_publication_and_link_recovery(client, db_session, 
     assert alert["status"] == "active"
     discover(first, "Gi0/1", "different-advertised-name", "Gi0/2", "1")
     updated_graph = client.get(route, headers=admin_headers).json()
+    assert updated_graph["links"][0]["configured_vlans"] == [10, 20]
+    assert updated_graph["links"][0]["method"] == "lldp"
     assert next(node for node in updated_graph["nodes"] if node["id"] == node_id)["label"] == "Edited switch"
     assert updated_graph["layout"]["positions"][str(node_id)] == [12, 34]
     assert client.get(alerts, headers=viewer_headers).json()["alerts"][0]["id"] == alert["id"]

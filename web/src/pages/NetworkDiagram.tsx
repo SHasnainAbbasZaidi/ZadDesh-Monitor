@@ -4,6 +4,7 @@ import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import type { Diagram } from '../components/ui/NetworkGraph';
 import { ExpandedTopology } from '../components/ui/ExpandedTopology';
+import { expandedLayout } from '../components/ui/topologyLayout';
 import { api, request } from '../services/api';
 import { useAddonUpdates } from '../services/addonUpdates';
 import type { Check, Site } from '../types';
@@ -90,6 +91,9 @@ export default function NetworkDiagram() {
   const activeGraph = graph?.id === id ? graph : undefined;
   const visible = activeGraph && search.trim() ? activeGraph.nodes.filter(node => node.label.toLowerCase().includes(search.trim().toLowerCase())) : activeGraph?.nodes;
   const nodesById = new Map(activeGraph?.nodes.map(node => [node.id, node]));
+  const groups = activeGraph ? expandedLayout(activeGraph).groupByNode : undefined;
+  const intersiteLinks = activeGraph?.links.filter(link => groups?.get(link.source) !== groups?.get(link.target)
+    && (link.speed === 10_000_000_000 || !!link.configured_vlans?.length)) ?? [];
   const connections = selectedNode ? activeGraph?.links.flatMap(link => {
     if (link.source === selectedNode.id) return [{ link, local: link.source_port, remote: link.target_port, peer: nodesById.get(link.target) }];
     if (link.target === selectedNode.id) return [{ link, local: link.target_port, remote: link.source_port, peer: nodesById.get(link.source) }];
@@ -203,6 +207,17 @@ export default function NetworkDiagram() {
           else if (png.current) download('network-diagram.png', png.current());
         }}>PNG</button>
       </div>
+      {intersiteLinks.length > 0 && <details className="topology-uplinks" open>
+        <summary className="font-semibold text-sm">Intersite uplinks ({intersiteLinks.length})</summary>
+        <ul className="topology-uplink-list">{intersiteLinks.map(link => <li key={link.id}>
+          <button type="button" className="ops-button" onClick={() => inspect('edge', link.id)}>
+            <Cable size={15} aria-hidden="true" />
+            <span><strong>{nodesById.get(link.source)?.label} · {link.source_port || 'Unknown port'}</strong><br />
+              {nodesById.get(link.target)?.label} · {link.target_port || 'Unknown port'}</span>
+            <Badge status={link.status} />
+          </button>
+        </li>)}</ul>
+      </details>}
       <div className={`topology-workbench${expanded ? ' topology-workbench-expanded' : ''}`}>
         <aside className="topology-devices" aria-label="Diagram devices">
           <label className="block text-sm font-semibold" htmlFor="topology-find">Devices</label>
@@ -255,6 +270,20 @@ export default function NetworkDiagram() {
         <p><Badge status={selectedLink.status} /> {selectedLink.method.toUpperCase()} · {selectedLink.confidence} confidence
           {selectedLink.speed != null && ` · ${selectedLink.speed.toLocaleString()} bps`}
           {selectedLink.utilization != null && ` · ${selectedLink.utilization.toFixed(1)}% utilization`}</p>
+        <form key={selectedLink.id} className="space-y-2" onSubmit={event => {
+          event.preventDefault();
+          const text = String(new FormData(event.currentTarget).get('vlans') ?? '').trim();
+          const values = text ? text.split(/\s*,\s*/).map(Number) : [];
+          if (values.some(value => !Number.isInteger(value) || value < 1 || value > 4094)) {
+            setError('Enter VLAN IDs from 1 to 4094, separated by commas.'); return;
+          }
+          void mutate(`${endpoint}/links/${selectedLink.id}`, 'PUT', { ...selectedLink, configured_vlans: values });
+        }}>
+          <p className="text-xs ops-muted">{selectedLink.configured_vlans?.length
+            ? `Recorded VLANs: ${selectedLink.configured_vlans.join(', ')}` : 'Allowed VLANs have not been verified from the switch.'}</p>
+          <label className="block text-xs">VLAN IDs confirmed on the switch<input name="vlans" className="dash-select block w-full" defaultValue={selectedLink.configured_vlans?.join(', ')} /></label>
+          <button type="submit" className="ops-button">Save VLAN record</button>
+        </form>
         <button className="ops-button" onClick={() => void mutate(`${endpoint}/links/${selectedLink.id}`, 'DELETE')}>Remove link</button>
       </div>}
       <details key={selectedNode?.id ?? (selectedLink ? `link-${selectedLink.id}` : 'new')} className="mt-4" open={Boolean(selectedNode || selectedLink)}><summary className="cursor-pointer text-sm font-semibold">{selectedNode ? 'Configure device on map' : selectedLink ? 'Configure link on map' : 'Add a device or link'}</summary>
