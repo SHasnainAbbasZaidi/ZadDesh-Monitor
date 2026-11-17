@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
-import { LogOut, PanelLeftClose, PanelLeftOpen, Shield, Search } from 'lucide-react';
+import { LogOut, Menu, Shield, Search } from 'lucide-react';
 
 interface HeaderProps {
   onSearchChange?: (term: string) => void;
@@ -30,7 +30,7 @@ export const Header: React.FC<HeaderProps> = ({ onSearchChange, sidebarOpen, onT
       <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         <button type="button" className="ops-button dash-icon-button shrink-0" aria-controls="app-sidebar" aria-expanded={sidebarOpen}
           aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'} title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'} onClick={onToggleSidebar}>
-          {sidebarOpen ? <PanelLeftClose size={17} aria-hidden="true" /> : <PanelLeftOpen size={17} aria-hidden="true" />}
+          <Menu size={18} aria-hidden="true" />
         </button>
         {onSearchChange && <div className="relative min-w-0 flex-1 max-w-xs">
           <Search aria-hidden="true" className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
