@@ -26,12 +26,20 @@ export const Header: React.FC<HeaderProps> = ({ onSearchChange, sidebarOpen, onT
   }, [onSearchChange]);
 
   return (
-    <header className="ops-chrome h-16 border-b px-3 sm:px-6 flex items-center justify-between gap-2 shrink-0 sticky top-0 z-30">
+    <header className="ops-chrome h-16 border-b pr-3 sm:pr-6 flex items-center justify-between gap-2 shrink-0 z-30">
       <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
-        <button type="button" className="ops-button dash-icon-button shrink-0" aria-controls="app-sidebar" aria-expanded={sidebarOpen}
-          aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'} title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'} onClick={onToggleSidebar}>
-          <Menu size={18} aria-hidden="true" />
-        </button>
+        <div className={`flex shrink-0 items-center gap-2 px-3 sm:gap-3 sm:px-5${sidebarOpen ? ' md:w-56' : ''}`}>
+          <button type="button" className="ops-button dash-icon-button shrink-0" aria-controls="app-sidebar" aria-expanded={sidebarOpen}
+            aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'} title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'} onClick={onToggleSidebar}>
+            <Menu size={18} aria-hidden="true" />
+          </button>
+          <div className="flex items-center gap-2 whitespace-nowrap">
+            <div aria-hidden="true" className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-tr from-sky-600 to-cyan-400 text-lg font-black text-white shadow-md shadow-sky-500/20">Z</div>
+            <span className="sr-only sm:not-sr-only text-base font-bold tracking-tight text-slate-900 dark:text-white">
+              Zad<span className="text-sky-500">Desh</span>
+            </span>
+          </div>
+        </div>
         {onSearchChange && <div className="relative min-w-0 flex-1 max-w-xs">
           <Search aria-hidden="true" className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input

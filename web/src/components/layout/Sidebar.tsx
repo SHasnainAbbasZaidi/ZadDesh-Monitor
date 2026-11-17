@@ -43,19 +43,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ].filter(item => user?.role === 'admin' || ['overview', 'logs', 'alerts'].includes(item.id));
 
   return (
-    <aside id="app-sidebar" className={open ? 'ops-chrome w-full md:w-56 border-b md:border-b-0 md:border-r flex flex-col md:h-dvh shrink-0 select-none' : 'hidden'}>
-      {/* Brand Header */}
-      <div className="ops-chrome h-12 md:h-16 px-4 md:px-5 border-b flex items-center justify-between">
-        <div className="flex items-center space-x-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-sky-600 to-cyan-400 flex items-center justify-center text-white font-black text-lg shadow-md shadow-sky-500/20">
-            Z
-          </div>
-          <span className="font-bold text-base tracking-tight text-slate-900 dark:text-white">
-            Zad<span className="text-sky-500">Desh</span>
-          </span>
-        </div>
-      </div>
-
+    <aside id="app-sidebar" className={open ? 'ops-chrome w-full md:w-56 border-b md:border-b-0 md:border-r flex flex-col shrink-0 select-none' : 'hidden'}>
       {/* Navigation Links */}
       <nav aria-label="Main navigation" className="flex md:block md:flex-1 gap-1 px-2 py-2 md:px-3 md:py-4 md:space-y-1 overflow-auto">
         {navItems.map((item) => {
