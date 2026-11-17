@@ -20,7 +20,7 @@ export const Card: React.FC<CardProps> = ({
       className={`bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm overflow-hidden ${className}`}
     >
       {(title || headerAction) && (
-        <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+        <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
           <div>
             {title && (
               <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
@@ -36,7 +36,7 @@ export const Card: React.FC<CardProps> = ({
           {headerAction && <div>{headerAction}</div>}
         </div>
       )}
-      <div className="p-5">{children}</div>
+      <div className="p-4">{children}</div>
     </div>
   );
 };

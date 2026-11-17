@@ -33,12 +33,13 @@ export default function MetricPlot({ title, unit, data, channels, range, failure
   useEffect(() => {
     const ink = getComputedStyle(document.documentElement).getPropertyValue('--ops-muted').trim();
     const line = getComputedStyle(document.documentElement).getPropertyValue('--ops-line').trim();
-    const axisLabel = { color: ink };
+    const axisLabel = { color: ink, fontSize: 11, hideOverlap: true, margin: 10 };
     const markers = annotations?.map(item => ({ xAxis: Date.parse(item.timestamp), name: item.label }));
     const times = markers?.map(marker => marker.xAxis) ?? [];
     const sampleTimes = markers ? plotPoints(data ?? []).map(([time]) => time) : [];
     const xAxis = { type: 'time', min: range?.start ?? (times.length ? Math.min(...times, ...sampleTimes) : undefined),
-      max: range?.end ?? (times.length ? Math.max(...times, ...sampleTimes) : undefined), axisLabel, axisLine: { lineStyle: { color: line } } };
+      max: range?.end ?? (times.length ? Math.max(...times, ...sampleTimes) : undefined), splitNumber: 4,
+      axisLabel: { ...axisLabel, showMinLabel: false, showMaxLabel: false }, axisLine: { lineStyle: { color: line } } };
     const outages = channels?.filter(channel => channel.failures.length) ?? [];
     const hasOutages = outages.length > 0;
     const outageHeight = 16;
@@ -55,14 +56,16 @@ export default function MetricPlot({ title, unit, data, channels, range, failure
       color: [color || getComputedStyle(document.documentElement).getPropertyValue('--ops-accent').trim()],
       aria: { enabled: true, label: { description: `${title}, measured in ${unit} over time.${hasOutages ? ' Failed probes are shown below the latency axis.' : ''}` } },
       grid: hasOutages ? [
-        { left: 54, right: 18, top: 18, bottom: 39 + outageHeight },
-        { left: 54, right: 18, height: outageHeight, bottom: 31 },
-      ] : [{ left: 54, right: 18, top: 18, bottom: 32 }],
+        { left: 46, right: 22, top: 18, bottom: 43 + outageHeight },
+        { left: 46, right: 22, height: outageHeight, bottom: 35 },
+      ] : [{ left: 46, right: 22, top: 18, bottom: 36 }],
       tooltip: { trigger: 'axis', renderMode: 'richText', valueFormatter: (value: unknown) => value == null ? 'No sample' : `${Number(value).toLocaleString()} ${unit}` },
       axisPointer: { link: [{ xAxisIndex: 'all' }] },
       xAxis: hasOutages ? [{ ...xAxis, axisLabel: { show: false } }, { ...xAxis, gridIndex: 1 }] : [xAxis],
       yAxis: [
-        { type: 'value', axisLabel, splitLine: { lineStyle: { color: line } }, scale: true },
+        { type: 'value', splitNumber: 4, axisLabel: { ...axisLabel,
+          formatter: (value: number) => new Intl.NumberFormat(undefined, { notation: 'compact', maximumSignificantDigits: 3 }).format(value) },
+          splitLine: { lineStyle: { color: line } }, scale: true },
         ...(hasOutages ? [{ type: 'value', gridIndex: 1, min: 0, max: 2, show: false }] : []),
       ],
       dataZoom: [{ type: 'inside', xAxisIndex: hasOutages ? [0, 1] : [0], zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: false }],

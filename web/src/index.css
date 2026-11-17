@@ -60,11 +60,12 @@
 .ops-eyebrow { display: flex; align-items: center; gap: .45rem; color: var(--ops-accent); font-size: .69rem; font-weight: 720; text-transform: uppercase; letter-spacing: .13em; }
 .ops-button, .dash-select {
   display: inline-flex; align-items: center; gap: .45rem; color: var(--ops-ink);
-  padding: .46rem .65rem; font-weight: 650; font-size: .75rem;
+  padding: .39rem .58rem; font-weight: 650; font-size: .75rem;
   border: 1px solid var(--ops-line); border-radius: .55rem; background: var(--ops-panel); white-space: nowrap;
 }
 .ops-button:hover:not(:disabled), .dash-select:hover:not(:disabled) { border-color: var(--ops-accent); color: var(--ops-accent); }
 .ops-button:disabled, .dash-select:disabled { opacity: .55; cursor: not-allowed; }
+.settings-sections .ops-button[aria-pressed="true"] { border-color: var(--ops-accent); color: var(--ops-accent); }
 button.ops-button, button.overview-tile, button.ops-sign-out {
   transition: scale .24s cubic-bezier(.2,.8,.35,1.35), border-color .15s ease;
 }
@@ -86,7 +87,7 @@ button.ops-button:active:enabled, button.overview-tile:active:enabled, button.op
 [data-tone="down"] { --tone: var(--ops-down); }
 [data-tone="unknown"], [data-tone="unmanaged"] { --tone: var(--ops-unknown); }
 
-.network-dashboard { display: grid; gap: 1rem; }
+.network-dashboard { display: grid; gap: .8rem; }
 .dash-top { display: flex; align-items: end; justify-content: space-between; flex-wrap: wrap; gap: 1rem; margin-bottom: .2rem; }
 .dash-top h1 { font-size: clamp(1.65rem, 3vw, 2.2rem); font-weight: 730; letter-spacing: -.045em; line-height: 1.14; margin: .42rem 0; }
 .dash-toolbar, .dash-chart-controls, .dash-inventory-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem; }
@@ -109,12 +110,12 @@ button.ops-button:active:enabled, button.overview-tile:active:enabled, button.op
 .dash-grid, .dash-side-stack { display: grid; gap: .9rem; min-width: 0; align-content: start; }
 .dash-panel-head {
   display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: .5rem;
-  padding: .85rem 1rem; border-bottom: 1px solid var(--ops-line);
+  padding: .7rem .85rem; border-bottom: 1px solid var(--ops-line);
 }
 .dash-panel-head h2 { display: flex; align-items: center; gap: .45rem; font-size: .9rem; font-weight: 680; }
 .dash-panel-head h2 svg { color: var(--ops-accent); flex: none; }
 .dash-panel-head p { margin-top: .17rem; color: var(--ops-muted); font-size: .73rem; }
-.dash-panel-body { padding: .85rem 1rem; min-width: 0; }
+.dash-panel-body { padding: .7rem .85rem; min-width: 0; }
 .dash-chart-controls, .dash-inventory-controls { margin-bottom: .75rem; }
 .dash-latency-selects, .dash-latency-footer { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem; min-width: 0; }
 .dash-latency-selects select { max-width: 100%; }

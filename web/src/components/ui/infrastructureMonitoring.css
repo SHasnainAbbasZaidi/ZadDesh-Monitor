@@ -8,7 +8,7 @@
 .infra-category summary svg { transform: rotate(-90deg); }
 .infra-category[open] summary svg { transform: none; }
 .infra-category summary span { margin-left: auto; font-variant-numeric: tabular-nums; }
-.infra-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 245px), 1fr)); gap: .5rem; padding: 0 .6rem .6rem; }
+.infra-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: .5rem; padding: 0 .6rem .6rem; }
 .infra-card-wrapper { min-width: 0; }
 .infra-monitoring [data-level], .infra-device-content [data-level] { --infra-level: var(--ops-unknown); }
 .infra-monitoring [data-level="up"], .infra-device-content [data-level="up"] { --infra-level: var(--ops-up); }
@@ -16,7 +16,7 @@
 .infra-monitoring [data-level="orange"], .infra-device-content [data-level="orange"] { --infra-level: #a64a11; }
 .dark .infra-monitoring [data-level="orange"], .dark .infra-device-content [data-level="orange"] { --infra-level: #ff9f62; }
 .infra-monitoring [data-level="down"], .infra-device-content [data-level="down"] { --infra-level: var(--ops-down); }
-.infra-device-card { width: 100%; height: 100%; min-height: 94px; display: flex; justify-content: space-between; align-items: start; gap: .45rem; text-align: left; padding: .55rem .65rem; border: 1px solid var(--ops-line); border-inline-start: 3px solid var(--ops-unknown); border-radius: .55rem; background: var(--ops-subtle); transition: box-shadow 320ms ease-out, border-color 320ms ease-out; }
+.infra-device-card { width: 100%; height: 100%; min-height: 86px; display: flex; justify-content: space-between; align-items: start; gap: .45rem; text-align: left; padding: .55rem .65rem; border: 1px solid var(--ops-line); border-inline-start: 3px solid var(--ops-unknown); border-radius: .55rem; background: var(--ops-subtle); transition: box-shadow 320ms ease-out, border-color 320ms ease-out; }
 .infra-device-card[data-status="up"] { border-inline-start-color: var(--ops-up); }
 .infra-device-card[data-status="warning"] { border-inline-start-color: var(--ops-warning); }
 .infra-device-card[data-status="down"] { border-inline-start-color: var(--ops-down); }
