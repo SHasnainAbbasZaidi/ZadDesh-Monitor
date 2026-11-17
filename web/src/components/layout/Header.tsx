@@ -1,13 +1,15 @@
 import React, { useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
-import { LogOut, Shield, Search } from 'lucide-react';
+import { LogOut, PanelLeftClose, PanelLeftOpen, Shield, Search } from 'lucide-react';
 
 interface HeaderProps {
   onSearchChange?: (term: string) => void;
+  sidebarOpen: boolean;
+  onToggleSidebar: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onSearchChange }) => {
+export const Header: React.FC<HeaderProps> = ({ onSearchChange, sidebarOpen, onToggleSidebar }) => {
   const { user, logout } = useAuth();
   const { preference, setPreference } = useTheme();
   const search = useRef<HTMLInputElement>(null);
@@ -25,19 +27,24 @@ export const Header: React.FC<HeaderProps> = ({ onSearchChange }) => {
 
   return (
     <header className="ops-chrome h-16 border-b px-3 sm:px-6 flex items-center justify-between gap-2 shrink-0 sticky top-0 z-30">
-      {/* Search Input */}
-      {onSearchChange ? <div className="relative flex-1 max-w-xs">
-        <Search aria-hidden="true" className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-        <input
-          ref={search}
-          type="search"
-          aria-label="Search devices"
-          aria-keyshortcuts="Control+K Meta+K"
-          placeholder="Search devices…"
-          onChange={(e) => onSearchChange(e.target.value)}
-          className="ops-header-search w-full pl-9 pr-4 py-1.5 text-sm rounded-lg"
-        />
-      </div> : <div />}
+      <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
+        <button type="button" className="ops-button dash-icon-button shrink-0" aria-controls="app-sidebar" aria-expanded={sidebarOpen}
+          aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'} title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'} onClick={onToggleSidebar}>
+          {sidebarOpen ? <PanelLeftClose size={17} aria-hidden="true" /> : <PanelLeftOpen size={17} aria-hidden="true" />}
+        </button>
+        {onSearchChange && <div className="relative min-w-0 flex-1 max-w-xs">
+          <Search aria-hidden="true" className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            ref={search}
+            type="search"
+            aria-label="Search devices"
+            aria-keyshortcuts="Control+K Meta+K"
+            placeholder="Search devices…"
+            onChange={(e) => onSearchChange(e.target.value)}
+            className="ops-header-search w-full pl-9 pr-4 py-1.5 text-sm rounded-lg"
+          />
+        </div>}
+      </div>
 
       {/* Right Controls */}
       <div className="flex items-center gap-2 sm:gap-3 shrink-0">

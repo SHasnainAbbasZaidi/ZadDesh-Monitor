@@ -240,8 +240,8 @@ function totalTraffic(ports: Port[], direction: 'in' | 'out') {
   return values.length ? values.reduce((sum, value) => sum + value, 0) : null;
 }
 
-export function InfrastructureMonitoring({ fleet, sites, paused, refresh, onNavigate }: {
-  fleet?: FleetOverview; sites?: Site[]; paused: boolean; refresh: number; onNavigate?: () => void;
+export function InfrastructureMonitoring({ fleet, sites, refresh, onNavigate }: {
+  fleet?: FleetOverview; sites?: Site[]; refresh: number; onNavigate?: () => void;
 }) {
   const { user } = useAuth();
   const storageKey = `zaddesh-infrastructure-categories-${user?.username ?? ''}`;
@@ -255,7 +255,6 @@ export function InfrastructureMonitoring({ fleet, sites, paused, refresh, onNavi
   const [sort, setSort] = useState('name');
   const [selected, setSelected] = useState<string>();
   useEffect(() => {
-    if (paused) return;
     const controller = new AbortController();
     let timer: number | undefined;
     async function poll() {
@@ -271,7 +270,7 @@ export function InfrastructureMonitoring({ fleet, sites, paused, refresh, onNavi
     }
     void poll();
     return () => { controller.abort(); window.clearTimeout(timer); };
-  }, [paused, refresh]);
+  }, [refresh]);
 
   const inventory = new Map(fleet?.devices.map(device => [device.id, device]));
   const remote = new Map(summary?.devices.map(device => [device.id, failed ? { ...device, resources: {}, health: null, penalties: [],
@@ -311,7 +310,6 @@ export function InfrastructureMonitoring({ fleet, sites, paused, refresh, onNavi
     <div className="dash-panel-body space-y-3">
       <dl className="infra-summary">{counts.map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}</dl>
       {failed && <p className="ops-notice" role="status">Zabbix monitoring data is temporarily unavailable.</p>}
-      {paused && <p className="ops-muted text-xs">Monitoring refresh paused</p>}
       {!failed && summary?.at && <p className="ops-muted text-xs">Snapshot {new Date(summary.at).toLocaleTimeString()}</p>}
       <div className="flex flex-wrap gap-2">
         <input className="dash-select min-w-40" aria-label="Search infrastructure by name or IP" placeholder="Search name or IP" value={query} onChange={event => setQuery(event.target.value)} />

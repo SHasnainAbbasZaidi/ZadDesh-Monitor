@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, ArrowRight, Bell, CircleCheck, CircleHelp, CircleX, Clock3, Network, Pause, Play, RefreshCw, Server, TriangleAlert } from 'lucide-react';
+import { Activity, ArrowRight, Bell, CircleCheck, CircleHelp, CircleX, Clock3, Network, Server, TriangleAlert } from 'lucide-react';
 import { Badge } from '../components/ui/Badge';
 import { EntryDetails, incidentTitle } from '../components/ui/EntryDetails';
 import { OverviewLatency } from '../components/ui/OverviewLatency';
@@ -48,17 +48,14 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
 }) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [failed, setFailed] = useState(false);
-  const [paused, setPaused] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [fleetRefresh, setFleetRefresh] = useState(0);
   const [fleet, setFleet] = useState<FleetOverview & { received: Date }>();
   const [fleetFailed, setFleetFailed] = useState(false);
-  const [pausedIncidents, setPausedIncidents] = useState<IncidentPreviewSummary>();
   const [minutes, setMinutes] = useState(60);
-  const connection = useLiveUpdates(() => setRefresh(value => value + 1), paused);
+  const connection = useLiveUpdates(() => setRefresh(value => value + 1));
 
   useEffect(() => {
-    if (paused) return;
     let active = true;
     let timer: number | undefined;
     async function poll() {
@@ -76,10 +73,9 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
     }
     void poll();
     return () => { active = false; window.clearTimeout(timer); };
-  }, [paused, refresh]);
+  }, [refresh]);
 
   useEffect(() => {
-    if (paused) return;
     const controller = new AbortController();
     let timer: number | undefined;
     async function loadFleet() {
@@ -98,7 +94,7 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
     }
     void loadFleet();
     return () => { controller.abort(); window.clearTimeout(timer); };
-  }, [paused, fleetRefresh]);
+  }, [fleetRefresh]);
 
   function refreshDashboard() {
     setRefresh(value => value + 1);
@@ -106,12 +102,12 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
     onRefreshIncidents();
   }
 
-  const incidentData = paused ? pausedIncidents : incidents;
+  const incidentData = incidents;
   const incidentLabel = criticalOnly ? 'Critical incidents' : 'Active incidents';
   const stats = fleet?.stats;
   const total = stats?.total_devices ?? 0;
   const issue = stats ? stats.down + stats.warning : 0;
-  const live = !paused && !failed && connection === 'connected';
+  const live = !failed && connection === 'connected';
   const healthyShare = stats && total ? `${new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(stats.up / total)} healthy` : undefined;
 
   const statCards = [
@@ -130,7 +126,7 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
         </div>
         <div className="dash-toolbar">
           <span className="dash-live" data-live={live}>
-            <i aria-hidden="true" />{paused ? 'Refresh paused' : failed ? 'API unavailable' : live ? 'Live updates connected' : snapshot ? 'Polling' : 'Connecting'}
+            <i aria-hidden="true" />{failed ? 'API unavailable' : live ? 'Live updates connected' : snapshot ? 'Polling' : 'Connecting'}
           </span>
           <div className="dash-time"><Clock3 size={15} aria-hidden="true" />
             <select aria-label="Telemetry time range" value={minutes} onChange={event => setMinutes(Number(event.target.value))}>
@@ -138,19 +134,12 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
               <option value={360}>Last 6 hours</option><option value={1440}>Last 24 hours</option>
             </select>
           </div>
-          <button className="ops-button dash-icon-button" aria-label="Refresh dashboard" title="Refresh dashboard" disabled={paused} onClick={refreshDashboard}><RefreshCw size={15} /></button>
-          <button className="ops-button dash-icon-button" aria-label={paused ? 'Resume refresh' : 'Pause refresh'} title={paused ? 'Resume refresh' : 'Pause refresh'} onClick={() => {
-            if (!paused) setPausedIncidents(incidents);
-            setPaused(!paused);
-          }}>
-            {paused ? <Play size={15} /> : <Pause size={15} />}
-          </button>
         </div>
       </header>
 
       {failed && <div role="status" className="ops-notice">
         <TriangleAlert size={18} /><span>{snapshot ? 'Update failed. Showing the last received snapshot.' : 'Could not load infrastructure data.'}</span>
-        <button className="ops-button" onClick={() => { setPaused(false); refreshDashboard(); }}>Retry</button>
+        <button className="ops-button" onClick={refreshDashboard}>Retry</button>
       </div>}
 
       <section className="dash-stat-grid" aria-label="Infrastructure summary" aria-busy={!stats && !fleetFailed}>
@@ -188,7 +177,7 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
           </div>
         </section>
 
-        <InfrastructureMonitoring fleet={fleet} sites={snapshot?.sites} paused={paused} refresh={fleetRefresh} onNavigate={onNavigateToDevices} />
+        <InfrastructureMonitoring fleet={fleet} sites={snapshot?.sites} refresh={fleetRefresh} onNavigate={onNavigateToDevices} />
 
         <div className="dash-side-stack">
           <section className="dash-panel" aria-labelledby="incident-title">
