@@ -1,36 +1,18 @@
 import { useEffect, useState } from 'react';
-import { Activity, ArrowRight, Bell, CircleCheck, CircleHelp, CircleX, Clock3, Network, Server, TriangleAlert } from 'lucide-react';
+import { Activity, ArrowRight, Bell, CircleCheck, Clock3, TriangleAlert } from 'lucide-react';
 import { Badge } from '../components/ui/Badge';
 import { EntryDetails, incidentTitle } from '../components/ui/EntryDetails';
 import { OverviewLatency } from '../components/ui/OverviewLatency';
 import { InfrastructureMonitoring } from '../components/ui/InfrastructureMonitoring';
-import { RollingCount } from '../components/ui/RollingCount';
+import { OverviewDonuts, OverviewTiles } from '../components/ui/OverviewSummary';
 import { api, request } from '../services/api';
 import { useLiveUpdates } from '../services/live';
-import type { DeviceStats, FleetOverview, IncidentPreviewSummary, Site, SystemEvent } from '../types';
+import type { FleetOverview, IncidentPreviewSummary, Site, SystemEvent } from '../types';
 
 interface Snapshot {
   events: SystemEvent[];
   sites: Site[];
   received: Date;
-}
-
-const health = [
-  { key: 'up', label: 'Healthy', icon: CircleCheck },
-  { key: 'warning', label: 'Degraded', icon: TriangleAlert },
-  { key: 'down', label: 'Down', icon: CircleX },
-  { key: 'unknown', label: 'No availability data', icon: CircleHelp },
-  { key: 'unmanaged', label: 'Unmanaged', icon: Server },
-] as const;
-
-function FleetDistribution({ stats }: { stats?: DeviceStats }) {
-  const total = stats?.total_devices ?? 0;
-  return (
-    <div className="dash-fleet-distribution" aria-hidden="true">
-      {stats && total > 0 && health.map(({ key }) => stats[key] > 0 &&
-        <span key={key} data-tone={key} style={{ flexGrow: stats[key] }} />)}
-    </div>
-  );
 }
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
@@ -50,7 +32,7 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
   const [failed, setFailed] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [fleetRefresh, setFleetRefresh] = useState(0);
-  const [fleet, setFleet] = useState<FleetOverview & { received: Date }>();
+  const [fleet, setFleet] = useState<FleetOverview>();
   const [fleetFailed, setFleetFailed] = useState(false);
   const [minutes, setMinutes] = useState(60);
   const connection = useLiveUpdates(() => setRefresh(value => value + 1));
@@ -83,7 +65,7 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
         const result = await request<FleetOverview>('/zabbix/fleet', { signal: controller.signal });
         if (!controller.signal.aborted) {
           setFleet(previous => result.zabbix_unavailable && previous && !previous.zabbix_unavailable
-            ? previous : { ...result, received: new Date() });
+            ? previous : result);
           setFleetFailed(Boolean(result.zabbix_unavailable));
         }
       } catch {
@@ -104,19 +86,7 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
 
   const incidentData = incidents;
   const incidentLabel = criticalOnly ? 'Critical incidents' : 'Active incidents';
-  const stats = fleet?.stats;
-  const total = stats?.total_devices ?? 0;
-  const issue = stats ? stats.down + stats.warning : 0;
   const live = !failed && connection === 'connected';
-  const healthyShare = stats && total ? `${new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(stats.up / total)} healthy` : undefined;
-
-  const statCards = [
-    { label: 'Total devices', value: stats?.total_devices, icon: Server, tone: 'accent', hint: 'Combined inventory', action: onNavigateToDevices },
-    { label: 'Healthy', value: stats?.up, icon: CircleCheck, tone: 'up', hint: 'Available devices', action: onNavigateToDevices },
-    { label: 'Needs attention', value: stats ? issue : undefined, icon: TriangleAlert, tone: 'warning', hint: 'Down or degraded', action: onNavigateToDevices },
-    { label: incidentLabel, value: incidentData?.total, icon: Bell, tone: 'down',
-      hint: incidentData?.incomplete ? 'Some incident data is unavailable' : criticalOnly ? 'Availability and resource incidents' : 'Unacknowledged alerts', action: onNavigateToAlerts },
-  ];
 
   return (
     <div className="network-dashboard">
@@ -142,41 +112,14 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
         <button className="ops-button" onClick={refreshDashboard}>Retry</button>
       </div>}
 
-      <section className="dash-stat-grid" aria-label="Infrastructure summary" aria-busy={!stats && !fleetFailed}>
-        {statCards.map(({ label, value, icon: Icon, tone, hint, action }) => {
-          const Item = action ? 'button' : 'div';
-          return <Item type={action ? 'button' : undefined} className="dash-stat" data-tone={tone} key={label} onClick={action}>
-            <span className="dash-stat-label">{label}</span>
-            <span className="dash-stat-icon" aria-hidden="true"><Icon size={19} /></span>
-            <RollingCount value={value} />
-            <span className="dash-stat-foot">{hint}{action && <ArrowRight size={14} aria-hidden="true" />}</span>
-          </Item>;
-        })}
-      </section>
+      <div className="overview-top-grid">
+        <OverviewTiles stats={fleet?.stats} incidents={incidentData} incidentLabel={incidentLabel} fleetFailed={fleetFailed}
+          onDevices={onNavigateToDevices} onAlerts={onNavigateToAlerts} />
+        <OverviewLatency minutes={minutes} updatedAt={snapshot?.received.getTime()} />
+      </div>
+      <OverviewDonuts fleet={fleet} fleetFailed={fleetFailed} incidents={incidentData} />
 
       <div className="dash-grid">
-        <OverviewLatency minutes={minutes} updatedAt={snapshot?.received.getTime()} />
-
-        <section className="dash-panel dash-fleet-panel" aria-labelledby="fleet-title">
-          <header className="dash-panel-head"><div><h2 id="fleet-title"><Network size={16} /> Fleet health</h2><p>Current device status from ZadDesh and Zabbix</p></div></header>
-          <div className="dash-panel-body">
-            {healthyShare && <div className="dash-fleet-share"><strong>{healthyShare}</strong><span>{total.toLocaleString()} devices</span></div>}
-            <FleetDistribution stats={stats} />
-              <dl className="dash-legend">
-                {health.map(({ key, label, icon: Icon }) => <div key={key}>
-                  <dt><Icon size={15} data-tone={key} aria-hidden="true" />{label}</dt>
-                  <dd>{stats?.[key].toLocaleString() ?? '—'}</dd>
-                </div>)}
-              </dl>
-            <div className="dash-fleet-foot" role="status">
-              <h2>{!stats ? (fleetFailed ? 'Health unavailable' : 'Loading health') : !total ? 'No devices configured' : issue ? `${issue} ${issue === 1 ? 'needs' : 'need'} attention` : stats.up ? 'No reported degradation' : 'Awaiting device checks'}</h2>
-              <p>{fleetFailed ? (fleet?.zabbix_unavailable ? 'Zabbix is unavailable. Showing local device status.'
-                : fleet ? 'Fleet refresh failed. Showing the last received status.' : 'Could not load fleet status.')
-                : fleet ? `Updated at ${eventTime(fleet.received.toISOString())}` : 'Waiting for the monitoring API'}</p>
-            </div>
-          </div>
-        </section>
-
         <InfrastructureMonitoring fleet={fleet} sites={snapshot?.sites} refresh={fleetRefresh} onNavigate={onNavigateToDevices} />
 
         <div className="dash-side-stack">

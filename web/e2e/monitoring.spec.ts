@@ -116,8 +116,20 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 768, height: 1024 
 
       await page.getByRole('button', { name: 'Overview', exact: true }).click();
       await expect(page.getByText('Live updates connected')).toBeVisible();
-      await expect(page.getByText('No reported degradation')).toBeVisible();
-      let latency = page.getByRole('region', { name: 'Probe latency' });
+      const summary = page.getByRole('region', { name: 'Infrastructure summary' });
+      const fleetHealth = page.getByRole('region', { name: 'Fleet health' });
+      const latency = page.getByRole('region', { name: 'Probe latency' });
+      await expect(summary.getByRole('button')).toHaveCount(8);
+      await expect(fleetHealth.getByText(/% healthy/)).toBeVisible();
+      await expect(page.getByRole('region', { name: 'Devices by source' })).toBeVisible();
+      await expect(page.getByRole('region', { name: 'Recent incidents by type' })).toBeVisible();
+      const [summaryBox, latencyBox, fleetBox] = await Promise.all([summary.boundingBox(), latency.boundingBox(), fleetHealth.boundingBox()]);
+      expect(fleetBox!.y).toBeGreaterThanOrEqual(latencyBox!.y + latencyBox!.height);
+      if (viewport.width >= 1200) {
+        expect(latencyBox!.x).toBeGreaterThanOrEqual(summaryBox!.x + summaryBox!.width);
+      } else {
+        expect(latencyBox!.y).toBeGreaterThanOrEqual(summaryBox!.y + summaryBox!.height);
+      }
       await latency.getByLabel('Latency protocol').selectOption('http');
       const chooser = latency.getByLabel('Latency device');
       await expect(chooser).toHaveValue('all');
@@ -133,9 +145,6 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 768, height: 1024 
       await latency.getByRole('list', { name: 'Devices with outages' }).getByRole('button', { name }).click();
       await expect(chooser).toHaveValue(String(device.id));
       await chooser.selectOption('all');
-      // Fleet health polls independently. Exercise the existing manual refresh after the live chart updates.
-      await page.getByRole('button', { name: 'Refresh dashboard' }).click();
-      await expect(page.getByRole('heading', { name: '1 needs attention' })).toBeVisible();
       await expect(latency.getByText('Failed probes', { exact: true })).toBeVisible();
       const failureCsv = page.waitForEvent('download');
       await latency.getByRole('button', { name: /Export .* CSV/ }).click();
@@ -176,7 +185,6 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 768, height: 1024 
       await page.getByRole('button', { name: 'Overview', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Infrastructure overview' })).toBeVisible();
       await expect(page.getByText('Live updates connected')).toBeVisible();
-      latency = page.getByRole('region', { name: 'Probe latency' });
       await page.getByLabel('Telemetry time range').selectOption('15');
       await latency.getByLabel('Latency protocol').selectOption('http');
       await latency.getByLabel('Latency device').selectOption(String(device.id));
@@ -184,7 +192,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 768, height: 1024 
       await latency.getByLabel('Latency device').selectOption('all');
       await expect(latency.getByLabel('Latency device')).toHaveValue('all');
       await expect(latency.locator('canvas').first()).toBeVisible();
-      await expect(page.getByRole('region', { name: 'Device inventory' }).getByRole('row', { name: new RegExp(name) })).toBeVisible();
+      await expect(page.getByRole('region', { name: 'Infrastructure Device Monitoring' }).getByRole('button', { name: new RegExp(name) })).toBeVisible();
       for (const theme of ['light', 'dark']) {
         await page.getByLabel('Color theme').selectOption(theme);
         const axe = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();

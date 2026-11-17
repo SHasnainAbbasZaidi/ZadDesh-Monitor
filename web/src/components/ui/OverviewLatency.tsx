@@ -36,7 +36,7 @@ export function OverviewLatency({ minutes, updatedAt }: { minutes: number; updat
       if (selection !== 'all' && !data.devices.some(device => String(device.id) === selection)) setSelection('all');
       setResult({ key, data });
     }).catch(() => {
-      if (!controller.signal.aborted) setError('Could not load probe telemetry. Use Refresh to retry.');
+      if (!controller.signal.aborted) setError('Could not load probe telemetry. The next poll will retry.');
     });
     return () => controller.abort();
   }, [key, minutes, protocol, selection, updatedAt]);
@@ -76,7 +76,7 @@ export function OverviewLatency({ minutes, updatedAt }: { minutes: number; updat
       <div className="dash-panel-body">
         {error && <p role="alert" className="mb-2 text-sm ops-muted">{error}</p>}
         {reporting > 0 && current ? <MetricChart title={protocols[protocol] + ' latency'} unit="ms" channels={channels}
-          range={{ start: Date.parse(current.start), end: Date.parse(current.end) }} failureBucketSeconds={current.bucket_seconds} height={280} />
+          range={{ start: Date.parse(current.start), end: Date.parse(current.end) }} failureBucketSeconds={current.bucket_seconds} height={190} />
           : <div className="dash-chart-empty" role="status">
             <Activity size={25} />
             <strong>{error ? 'Telemetry unavailable' : !current ? 'Loading telemetry' : !devices.length ? 'No devices configured' : 'No samples in this range'}</strong>
