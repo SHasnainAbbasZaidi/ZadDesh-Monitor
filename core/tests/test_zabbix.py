@@ -23,6 +23,39 @@ from zaddesh_core.security import decrypt_secret, encrypt_secret
 from zaddesh_core.zabbix import ZabbixAPI, normalize_url
 
 
+def test_probe_history_uses_ping_items_matches_targets_and_converts_rtt(client, admin_headers, viewer_headers, monkeypatch):
+    clock = str(int(datetime.now(timezone.utc).timestamp()) - 30)
+
+    class Remote:
+        def rows(self, method, params):
+            if method == "item.get":
+                assert params["hostids"] == ["7"]
+                return [
+                    {"itemid": "1", "hostid": "7", "key_": "icmpping", "delay": "30s", "value_type": "3"},
+                    {"itemid": "2", "hostid": "7", "key_": "icmppingsec[other-target]", "value_type": "0"},
+                    {"itemid": "3", "hostid": "7", "key_": "icmppingsec", "value_type": "0"},
+                ]
+            assert method == "history.get" and params["time_till"] - params["time_from"] == 3600
+            assert params["itemids"] == (["1"] if params["history"] == 3 else ["3"])
+            if params["history"] == 3:
+                return [{"itemid": "1", "clock": clock, "value": "0"}]
+            return [{"itemid": "3", "clock": clock, "value": "0.012"}, {"itemid": "2", "clock": clock, "value": "5"}]
+
+    @contextmanager
+    def connection(_):
+        yield Remote()
+
+    monkeypatch.setattr(routes, "saved_api", connection)
+    path = "/api/v1/zabbix/probe-history"
+    assert client.post(path, headers=viewer_headers, json={"host_ids": ["7"]}).status_code == 403
+    result = client.post(path, headers=admin_headers, json={"host_ids": ["7"]})
+    assert result.status_code == 200
+    channel = result.json()["channels"]["7"]
+    assert channel["interval_seconds"] == 30
+    assert [point["value"] for point in channel["latency"]] == [12]
+    assert len(channel["failures"]) == 1
+
+
 def test_read_only_connection_inventory_problems_and_validation(client, db_session, admin_headers, viewer_headers, monkeypatch):
     token = token_hex(32)
     monkeypatch.setattr(settings.security, "encryption_key", token_hex(32))

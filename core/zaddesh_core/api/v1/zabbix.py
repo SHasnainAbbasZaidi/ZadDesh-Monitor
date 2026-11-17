@@ -4,6 +4,7 @@ import ssl
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from math import isfinite
 from typing import Annotated, Any, cast
 
 import httpx
@@ -38,6 +39,64 @@ PROBLEM_FIELDS = ["eventid", "name", "severity", "clock", "acknowledged"]
 class ConnectionInput(BaseModel):
     api_url: str = Field(min_length=1, max_length=1900)
     token: SecretStr = Field(min_length=1, max_length=512)
+
+
+class ProbeHistoryInput(BaseModel):
+    host_ids: list[HostID] = Field(min_length=1, max_length=100)
+
+
+@router.post("/probe-history")
+def probe_history(payload: ProbeHistoryInput, db: Session = Depends(get_db)):
+    end = datetime.now(timezone.utc).replace(microsecond=0)
+    start = end - timedelta(hours=1)
+    ids = set(payload.host_ids)
+    channels: dict[str, dict[str, Any]] = {}
+    with saved_api(db) as api:
+        items = api.rows("item.get", {"hostids": sorted(ids), "output": ["itemid", "hostid", "key_", "delay", "value_type"],
+                                       "filter": {"status": "0"}, "search": {"key_": "icmpping"}, "startSearch": True,
+                                       "sortfield": "itemid", "limit": 1000})
+        candidates: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
+        for item in items:
+            host_id = str(item.get("hostid"))
+            key, _, parameters = str(item.get("key_", "")).partition("[")
+            item_id = str(item.get("itemid"))
+            if host_id not in ids or not (item_id.isascii() and item_id.isdecimal() and len(item_id) <= 20):
+                continue
+            if key not in {"icmpping", "icmppingsec"} or str(item.get("value_type")) != ("3" if key == "icmpping" else "0"):
+                continue
+            target = parameters.rstrip("]").split(",", 1)[0].strip('" ')
+            candidates.setdefault(host_id, {}).setdefault(target, {}).setdefault(key, item)
+        selected = {}
+        for host_id, targets in candidates.items():
+            _, probes = min(targets.items(), key=lambda entry: ("icmpping" not in entry[1], -len(entry[1]), bool(entry[0]), entry[0]))
+            availability = probes.get("icmpping") or probes["icmppingsec"]
+            interval = duration(availability.get("delay"))
+            channels[host_id] = {"interval_seconds": interval, "latency": [], "successes": [], "failures": []}
+            selected.update({str(item["itemid"]): (host_id, key) for key, item in probes.items()})
+        for value_type, probe in ((0, "icmppingsec"), (3, "icmpping")):
+            item_ids = [item_id for item_id, (_, key) in selected.items() if key == probe]
+            if not item_ids:
+                continue
+            rows = api.rows("history.get", {"output": ["itemid", "clock", "value"], "itemids": item_ids, "history": value_type,
+                                             "time_from": int(start.timestamp()), "time_till": int(end.timestamp()),
+                                             "sortfield": "clock", "sortorder": "DESC", "limit": 12000})
+            for row in rows:
+                selected_item = selected.get(str(row.get("itemid")))
+                if selected_item is None or selected_item[1] != probe:
+                    continue
+                try:
+                    clock, value = int(row["clock"]), float(row["value"])
+                except (KeyError, ValueError, TypeError, OverflowError):
+                    continue
+                if not int(start.timestamp()) <= clock <= int(end.timestamp()) or not isfinite(value):
+                    continue
+                channel = channels[selected_item[0]]
+                timestamp = datetime.fromtimestamp(clock, timezone.utc)
+                if value_type == 3 and value in (0, 1):
+                    channel["successes" if value else "failures"].append(timestamp)
+                elif value_type == 0 and 0 < value < 3600:
+                    channel["latency"].append({"timestamp": timestamp, "value": value * 1000})
+    return {"start": start, "end": end, "channels": channels}
 
 
 def require_secure(request: Request) -> None:

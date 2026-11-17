@@ -4,6 +4,7 @@ import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { MetricChart } from '../components/ui/MetricChart';
+import { UptimeSparkline, type ProbeHistory, type ProbeWindow } from '../components/ui/UptimeSparkline';
 import { DefaultSnmpFields, readSnmpInterface, SnmpFields } from '../components/ui/SnmpCheckForm';
 import { useAuth } from '../context/AuthContext';
 import { api, request } from '../services/api';
@@ -47,6 +48,10 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
   const [zabbixLoading, setZabbixLoading] = useState(isAdmin);
   const [zabbixError, setZabbixError] = useState('');
   const [zabbixRefresh, setZabbixRefresh] = useState(0);
+  const [localHistory, setLocalHistory] = useState<Awaited<ReturnType<typeof api.getProbeLatency>>>();
+  const [remoteHistory, setRemoteHistory] = useState<ProbeWindow & { channels: Record<string, ProbeHistory> }>();
+  const [localHistoryError, setLocalHistoryError] = useState(false);
+  const [remoteHistoryError, setRemoteHistoryError] = useState(false);
   const [sites, setSites] = useState<Site[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -234,6 +239,56 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
     }),
   ]));
   const visibleKeys = [...filteredDevices.map(device => `local-${device.id}`), ...filteredZabbix.map(host => `zabbix-${host.hostid}`)];
+  const visibleZabbixProbes = filteredZabbix.map(host => host.hostid).join(',');
+  useEffect(() => {
+    if (showZabbix) return;
+    const controller = new AbortController();
+    async function refresh() {
+      try {
+        const data = await api.getProbeLatency('icmp', 60, 'all', controller.signal);
+        if (!controller.signal.aborted) { setLocalHistory(data); setLocalHistoryError(false); }
+      } catch {
+        if (!controller.signal.aborted) setLocalHistoryError(true);
+      }
+    }
+    void refresh();
+    const timer = globalThis.setInterval(refresh, 60_000);
+    return () => { controller.abort(); globalThis.clearInterval(timer); };
+  }, [showZabbix, zabbixRefresh]);
+
+  useEffect(() => {
+    if (showZabbix || !visibleZabbixProbes) return;
+    const controller = new AbortController();
+    async function refresh() {
+      const ids = visibleZabbixProbes.split(',');
+      try {
+        let combined: typeof remoteHistory;
+        for (let index = 0; index < ids.length; index += 100) {
+          const data = await request<NonNullable<typeof remoteHistory>>('/zabbix/probe-history', {
+            method: 'POST', signal: controller.signal, body: JSON.stringify({ host_ids: ids.slice(index, index + 100) }),
+          });
+          combined = combined ? { ...data, channels: { ...combined.channels, ...data.channels } } : data;
+        }
+        if (!controller.signal.aborted) { setRemoteHistory(combined); setRemoteHistoryError(false); }
+      } catch {
+        if (!controller.signal.aborted) setRemoteHistoryError(true);
+      }
+    }
+    void refresh();
+    const timer = globalThis.setInterval(refresh, 60_000);
+    return () => { controller.abort(); globalThis.clearInterval(timer); };
+  }, [showZabbix, visibleZabbixProbes, zabbixRefresh]);
+
+  const localChannels = new Map(localHistory?.channels.map(channel => [channel.device_id, channel]));
+  function renderUptime(label: string, offline: boolean, deviceId?: number, hostId?: string) {
+    const remote = hostId ? remoteHistory?.channels[hostId] : undefined;
+    const useRemote = !!(remote && (remote.latency.length || remote.failures.length || remote.successes?.length));
+    const history = useRemote ? remote : deviceId === undefined ? undefined : localChannels.get(deviceId);
+    const loading = (deviceId !== undefined && !localHistory && !localHistoryError) || (!!hostId && !remoteHistory && !remoteHistoryError);
+    return <UptimeSparkline window={useRemote ? remoteHistory : localHistory} history={history}
+      source={useRemote || deviceId === undefined ? 'Zabbix' : 'ZadDesh'} label={label} loading={loading} offline={offline}
+      error={(!!hostId && remoteHistoryError) || (deviceId !== undefined && localHistoryError)} />;
+  }
   const allSelected = visibleKeys.length > 0 && visibleKeys.every(key => selection.has(key));
   const selectedHosts = zabbixHosts.filter(host => selection.has(`zabbix-${host.hostid}`));
   const selectedIds = [...new Set([...devices.filter(device => selection.has(`local-${device.id}`)).map(device => device.id),
@@ -375,7 +430,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
                   </td>
                   <td className="px-5 py-3.5 font-mono text-xs ops-muted">{addresses.join(', ') || '—'}</td>
                   <td className="px-5 py-3.5 text-xs ops-muted">—</td>
-                  <td className="px-5 py-3.5 text-xs ops-muted">—</td>
+                  <td className="px-5 py-3.5">{renderUptime(label, health.status === 'down', local?.id, host.hostid)}</td>
                   <td className="px-5 py-3.5 text-xs ops-muted">—</td>
                   <td className="px-5 py-3.5 text-right">
                     <div className="flex flex-wrap items-start justify-end gap-2">
@@ -409,13 +464,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
                     <span>{dev.vendor || 'Generic'}</span>
                     {dev.model && <span className="ml-1 text-slate-400">({dev.model})</span>}
                   </td>
-                  <td className="px-5 py-3.5 font-mono text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                    {dev.uptime_seconds > 0
-                      ? `${Math.floor(dev.uptime_seconds / 86400)}d ${Math.floor(
-                          (dev.uptime_seconds % 86400) / 3600
-                        )}h`
-                      : '—'}
-                  </td>
+                  <td className="px-5 py-3.5">{renderUptime(dev.name, dev.status === 'down', dev.id)}</td>
                   <td className="px-5 py-3.5 text-xs text-slate-400 whitespace-nowrap">
                     {dev.last_seen ? new Date(dev.last_seen).toLocaleTimeString() : 'Never'}
                   </td>
