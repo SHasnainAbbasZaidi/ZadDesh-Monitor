@@ -13,12 +13,14 @@ import { IncidentWorkspace } from './pages/IncidentWorkspace';
 import type { IncidentPreview, IncidentPreviewSummary } from './types';
 
 const NetworkDiagram = lazy(() => import('./pages/NetworkDiagram'));
-const EmailAlerts = lazy(() => import('./pages/EmailAlerts'));
 const NetworkDiagramWidget = lazy(() => import('./pages/NetworkDiagram').then(module => ({ default: module.NetworkDiagramWidget })));
+const emailSettingsHash = '#settings/email-alerts';
+const isEmailSettingsLink = () => [emailSettingsHash, '#email-alerts'].includes(window.location.hash);
 
 export const AppContent: React.FC = () => {
   const { user, isLoading, isSetupRequired } = useAuth();
-  const [currentTab, setCurrentTab] = useState(() => window.location.hash === '#email-alerts' ? 'email-alerts' : 'overview');
+  const [currentTab, setCurrentTab] = useState(() => isEmailSettingsLink() ? 'settings' : 'overview');
+  const [emailSettings, setEmailSettings] = useState(isEmailSettingsLink);
   const [localIncidents, setLocalIncidents] = useState<IncidentPreviewSummary>();
   const [zabbixIncidents, setZabbixIncidents] = useState<IncidentPreviewSummary>();
   const [incidentRefresh, setIncidentRefresh] = useState(0);
@@ -28,19 +30,30 @@ export const AppContent: React.FC = () => {
   const incidentWorkspace = features?.incident_workspace;
 
   useEffect(() => {
-    const onHashChange = () => setCurrentTab(previous => window.location.hash === '#email-alerts' ? 'email-alerts' : previous === 'email-alerts' ? 'overview' : previous);
+    const onHashChange = () => {
+      const openEmail = isEmailSettingsLink();
+      setEmailSettings(openEmail);
+      if (openEmail) {
+        setCurrentTab('settings');
+        if (user?.role === 'admin' && window.location.hash !== emailSettingsHash) {
+          window.history.replaceState(null, '', emailSettingsHash);
+        } else if (user && user.role !== 'admin') {
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        }
+      }
+    };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (!user || isLoading) return;
-    if (currentTab === 'email-alerts' && user.role === 'admin') {
-      if (window.location.hash !== '#email-alerts') window.history.replaceState(null, '', '#email-alerts');
-    } else if (window.location.hash === '#email-alerts') {
+    if (currentTab === 'settings' && emailSettings && user.role === 'admin') {
+      if (window.location.hash !== emailSettingsHash) window.history.replaceState(null, '', emailSettingsHash);
+    } else if (isEmailSettingsLink()) {
       window.history.replaceState(null, '', window.location.pathname + window.location.search);
     }
-  }, [currentTab, user, isLoading]);
+  }, [currentTab, emailSettings, user, isLoading]);
 
   useEffect(() => {
     if (!user) return;
@@ -120,6 +133,7 @@ export const AppContent: React.FC = () => {
       currentTab={tab}
       onSelectTab={(tab) => {
         setCurrentTab(tab);
+        setEmailSettings(false);
         setSearchQuery('');
       }}
       activeAlertsCount={incidents?.total ?? 0}
@@ -146,9 +160,8 @@ export const AppContent: React.FC = () => {
       {tab === 'devices' && <Devices searchQuery={searchQuery} />}
       {tab === 'checks' && <Checks />}
       {tab === 'alerts' && (incidentWorkspace ? <IncidentWorkspace /> : <Alerts />)}
-      {tab === 'email-alerts' && admin && <Suspense fallback={<p role="status">Loading email notifications…</p>}><EmailAlerts /></Suspense>}
       {tab === 'logs' && (incidentWorkspace ? <IncidentWorkspace initialTab="logs" /> : <Logs />)}
-      {tab === 'settings' && <Settings />}
+      {tab === 'settings' && admin && <Settings emailSelected={emailSettings} onSelectEmail={setEmailSettings} />}
     </AppLayout>
   );
 };

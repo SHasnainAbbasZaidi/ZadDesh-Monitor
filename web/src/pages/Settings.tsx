@@ -1,11 +1,33 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
+import { Mail, Settings as SettingsIcon } from 'lucide-react';
 import { Card } from '../components/ui/Card';
 import { UserManagement } from '../components/ui/UserManagement';
 import { ZabbixSettings } from '../components/ui/Zabbix';
 import { api } from '../services/api';
 import type { SystemInfo } from '../types';
 
-export function Settings() {
+const EmailAlerts = lazy(() => import('./EmailAlerts'));
+
+export function Settings({ emailSelected, onSelectEmail }: { emailSelected: boolean; onSelectEmail: (selected: boolean) => void }) {
+  return <div className="space-y-6">
+    <header>
+      <p className="ops-eyebrow">Administration</p>
+      <h1 className="ops-heading">System settings</h1>
+      {!emailSelected && <p className="ops-muted mt-2">Manage accounts and review the core runtime.</p>}
+    </header>
+    <nav aria-label="Settings sections" className="flex flex-wrap gap-2">
+      <button className="ops-button" type="button" aria-pressed={!emailSelected} style={!emailSelected ? { borderColor: 'var(--ops-accent)' } : undefined} onClick={() => onSelectEmail(false)}>
+        <SettingsIcon size={16} aria-hidden="true" /> General
+      </button>
+      <button className="ops-button" type="button" aria-pressed={emailSelected} style={emailSelected ? { borderColor: 'var(--ops-accent)' } : undefined} onClick={() => onSelectEmail(true)}>
+        <Mail size={16} aria-hidden="true" /> Email Alerts &amp; Notifications
+      </button>
+    </nav>
+    {emailSelected ? <Suspense fallback={<p role="status">Loading email notifications…</p>}><EmailAlerts /></Suspense> : <GeneralSettings />}
+  </div>;
+}
+
+function GeneralSettings() {
   const [info, setInfo] = useState<SystemInfo | null>(null);
   const [error, setError] = useState(false);
   useEffect(() => {
@@ -14,11 +36,6 @@ export function Settings() {
     return () => { active = false; };
   }, []);
   return <div className="space-y-6">
-    <header>
-      <p className="ops-eyebrow">Administration</p>
-      <h1 className="ops-heading">System settings</h1>
-      <p className="ops-muted mt-2">Manage accounts and review the core runtime.</p>
-    </header>
     <UserManagement />
     <ZabbixSettings />
     {error && <p role="alert" className="ops-notice">Could not read runtime information from the core.</p>}

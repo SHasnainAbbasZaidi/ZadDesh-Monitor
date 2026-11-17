@@ -461,7 +461,7 @@ export default function EmailAlerts() {
   const metrics = [['Email server', state], ['Active recipients', data?.stats.recipients], ['Active rules', data?.stats.rules],
     ['SMTP accepted today', data?.stats.accepted_today], ['Failed attempts today', data?.stats.failed_attempts_today], ['Pending alerts', data?.stats.pending]];
   return <section className="space-y-4">
-    <header className="flex flex-wrap justify-between items-center gap-3"><h1 className="ops-heading flex items-center gap-2"><Mail size={22} aria-hidden="true" /> Email Alerts &amp; Notifications</h1>
+    <header className="flex flex-wrap justify-between items-center gap-3"><h2 className="text-xl font-semibold flex items-center gap-2"><Mail size={20} aria-hidden="true" /> Email Alerts &amp; Notifications</h2>
       <button type="button" className="ops-button" onClick={() => void mutate(() => Promise.resolve(), 'Notification workspace refreshed.')} disabled={busy}><RefreshCw size={15} /> Refresh</button></header>
     <dl className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">{metrics.map(([label, value]) => <div key={label} className="dash-panel p-3"><dt className="ops-muted text-xs">{label}</dt><dd className="text-lg font-semibold">{value ?? '—'}</dd></div>)}</dl>
     <nav aria-label="Email notification sections" className="flex flex-wrap gap-2">{sections.map((label, index) => <button type="button" key={label}
