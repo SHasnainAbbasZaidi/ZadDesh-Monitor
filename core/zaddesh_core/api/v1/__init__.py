@@ -15,6 +15,7 @@ from zaddesh_core.config import settings
 from zaddesh_core.api.v1.stream import router as stream_router
 from zaddesh_core.api.v1.zabbix import fleet_router, router as zabbix_router
 from zaddesh_core.api.v1.infrastructure_monitoring import router as infrastructure_monitoring_router
+from zaddesh_core.api.v1.email_alerts import router as email_alerts_router
 
 api_v1_router = APIRouter(prefix="/api/v1")
 
@@ -33,6 +34,7 @@ api_v1_router.include_router(topology_widgets)
 api_v1_router.include_router(stream_router)
 api_v1_router.include_router(zabbix_router)
 api_v1_router.include_router(infrastructure_monitoring_router)
+api_v1_router.include_router(email_alerts_router)
 api_v1_router.include_router(fleet_router)
 
 

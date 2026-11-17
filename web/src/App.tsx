@@ -13,11 +13,12 @@ import { IncidentWorkspace } from './pages/IncidentWorkspace';
 import type { IncidentPreview, IncidentPreviewSummary } from './types';
 
 const NetworkDiagram = lazy(() => import('./pages/NetworkDiagram'));
+const EmailAlerts = lazy(() => import('./pages/EmailAlerts'));
 const NetworkDiagramWidget = lazy(() => import('./pages/NetworkDiagram').then(module => ({ default: module.NetworkDiagramWidget })));
 
 export const AppContent: React.FC = () => {
   const { user, isLoading, isSetupRequired } = useAuth();
-  const [currentTab, setCurrentTab] = useState('overview');
+  const [currentTab, setCurrentTab] = useState(() => window.location.hash === '#email-alerts' ? 'email-alerts' : 'overview');
   const [localIncidents, setLocalIncidents] = useState<IncidentPreviewSummary>();
   const [zabbixIncidents, setZabbixIncidents] = useState<IncidentPreviewSummary>();
   const [incidentRefresh, setIncidentRefresh] = useState(0);
@@ -25,6 +26,21 @@ export const AppContent: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [features, setFeatures] = useState<{ incident_workspace: boolean; network_diagram_beta: boolean }>();
   const incidentWorkspace = features?.incident_workspace;
+
+  useEffect(() => {
+    const onHashChange = () => setCurrentTab(previous => window.location.hash === '#email-alerts' ? 'email-alerts' : previous === 'email-alerts' ? 'overview' : previous);
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  useEffect(() => {
+    if (!user || isLoading) return;
+    if (currentTab === 'email-alerts' && user.role === 'admin') {
+      if (window.location.hash !== '#email-alerts') window.history.replaceState(null, '', '#email-alerts');
+    } else if (window.location.hash === '#email-alerts') {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  }, [currentTab, user, isLoading]);
 
   useEffect(() => {
     if (!user) return;
@@ -130,6 +146,7 @@ export const AppContent: React.FC = () => {
       {tab === 'devices' && <Devices searchQuery={searchQuery} />}
       {tab === 'checks' && <Checks />}
       {tab === 'alerts' && (incidentWorkspace ? <IncidentWorkspace /> : <Alerts />)}
+      {tab === 'email-alerts' && admin && <Suspense fallback={<p role="status">Loading email notifications…</p>}><EmailAlerts /></Suspense>}
       {tab === 'logs' && (incidentWorkspace ? <IncidentWorkspace initialTab="logs" /> : <Logs />)}
       {tab === 'settings' && <Settings />}
     </AppLayout>

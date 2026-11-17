@@ -18,6 +18,7 @@ from zaddesh_core.api.v1 import api_v1_router
 from zaddesh_core.api.v1.network_diagram import topology_loop
 from zaddesh_core.api.v1.system import router as system_root_router
 from zaddesh_core.incident_delivery import delivery_loop
+from zaddesh_core.email_worker import email_loop
 
 
 @asynccontextmanager
@@ -27,11 +28,12 @@ async def lifespan(_app: FastAPI):
               and settings.features.incident_webhook_url and not settings.demo_mode else None)
     topology = (asyncio.create_task(topology_loop(stop)) if settings.features.network_diagram_beta
                 and not settings.demo_mode else None)
+    email = asyncio.create_task(email_loop(stop)) if not settings.demo_mode else None
     try:
         yield
     finally:
         stop.set()
-        await asyncio.gather(*(task for task in (worker, topology) if task is not None))
+        await asyncio.gather(*(task for task in (worker, topology, email) if task is not None))
 
 
 app = FastAPI(

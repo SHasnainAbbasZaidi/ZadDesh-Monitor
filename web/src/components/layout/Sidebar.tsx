@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   ScrollText,
   Network,
+  Mail,
   Settings as SettingsIcon,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
@@ -36,6 +37,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       badge: activeAlertsCount > 0 ? activeAlertsCount : null,
       badgeColor: 'bg-rose-700 text-white',
     },
+    { id: 'email-alerts', label: 'Email Alerts & Notifications', icon: Mail },
     ...(networkDiagram && user?.role === 'admin' ? [{ id: 'network-diagram', label: 'Network Diagram', icon: Network }] : []),
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
   ].filter(item => user?.role === 'admin' || ['overview', 'logs', 'alerts'].includes(item.id));

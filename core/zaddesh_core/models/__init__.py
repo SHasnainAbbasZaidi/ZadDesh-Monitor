@@ -26,6 +26,7 @@ from zaddesh_core.models.alerts import (
 )
 from zaddesh_core.models.snmp import SnmpMib, SnmpTrap
 from zaddesh_core.models.incidents import Incident, IncidentTimeline, IncidentParent, IncidentFilter, IncidentDelivery
+from zaddesh_core.models.email_alerts import EmailAttempt, EmailDelivery, EmailProblem, EmailRecipient, EmailRule, EmailSettings, EmailTemplate
 from zaddesh_core.models.topology import TopologyDiagram, TopologyNode, TopologyLink, TopologyRun, TopologyChange
 from zaddesh_core.models.zabbix import ZabbixAlertDismissal, ZabbixConnection, ZabbixHostImport
 from zaddesh_core.models.system import (
@@ -70,6 +71,13 @@ __all__ = [
     "IncidentParent",
     "IncidentFilter",
     "IncidentDelivery",
+    "EmailAttempt",
+    "EmailDelivery",
+    "EmailProblem",
+    "EmailRecipient",
+    "EmailRule",
+    "EmailSettings",
+    "EmailTemplate",
     "TopologyDiagram",
     "TopologyNode",
     "TopologyLink",

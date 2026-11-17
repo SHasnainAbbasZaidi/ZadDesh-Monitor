@@ -109,6 +109,14 @@ The script makes a consistent SQLite backup, copies every table to a separate Mo
 
 Supported operations are GET, GETNEXT, GETBULK (v2c/v3) and a bounded 64-object WALK. Numeric samples appear under `snmp.<numeric OID>` and in the device telemetry view. Counter rates, traps and MIB name lookup are separate, unavailable features.
 
+## Email Alerts & Notifications
+
+Administrators can configure the SMTP server, add employees and team memberships, and assign Zabbix notification rules in **Email Alerts & Notifications**. Save the SMTP settings, test the connection, and send a marked test message before enabling automatic notifications. SMTP credentials use the core encryption key. Set `ZADDESH_SECURITY__ENCRYPTION_KEY` to a persistent secret and use HTTPS or local loopback when entering credentials. Keep STARTTLS or SSL/TLS enabled when authenticating. XOAUTH2 accepts a valid provider-issued access token and requires a replacement when that token expires.
+
+Use the **Time zone** field for quiet hours, employee schedules, and daily history counts. The background worker begins with Zabbix trigger events created since automatic notifications were enabled. It sends recovery emails only after Zabbix confirms a recovery event, to eligible recipients whose earlier message was SMTP-accepted. **Skip recipients already queued or notified by native Zabbix email** uses the saved token's alert and media-type permissions. The worker delays affected mail when it cannot verify that check.
+
+SMTP-accepted status records the receiving mail server's response. Inspect SMTP server logs before manually retrying an interrupted or ambiguous attempt. Notification history is retained for 90 days and pending delivery is capped at 2,000 messages. Run the core's Alembic migrations before starting an upgraded installation.
+
 ## Overview infrastructure monitoring
 
 The Infrastructure Device Monitoring section uses the saved Zabbix connection. It shows a usage estimate from fresh CPU, memory, and interface measurements, plus a separate health estimate based on confirmed availability, monitoring coverage, and problems. Detailed history is available to administrators. Category overrides are saved per user in the current browser.
