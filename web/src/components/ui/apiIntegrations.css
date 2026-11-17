@@ -1,0 +1,20 @@
+.integration-layout { display: grid; gap: 1rem; min-width: 0; }
+.integration-providers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .4rem; align-content: start; }
+.integration-provider { display: grid; gap: .2rem; padding: .6rem .7rem; text-align: start; border: 1px solid var(--ops-line); border-radius: .5rem; background: var(--ops-subtle); font-size: .8rem; }
+.integration-provider small { color: var(--ops-muted); font-size: .68rem; }
+.integration-provider[aria-pressed="true"] { border-color: var(--ops-accent); background: color-mix(in srgb, var(--ops-accent) 8%, var(--ops-panel)); }
+.integration-form { display: grid; gap: .7rem; min-width: 0; max-width: 45rem; }
+.integration-form fieldset { min-width: 0; }
+.integration-form legend { font-weight: 650; font-size: .95rem; padding-bottom: .35rem; }
+.integration-fields { display: grid; gap: .65rem; margin: .85rem 0; }
+.integration-field { display: grid; gap: .3rem; font-size: .76rem; min-width: 0; }
+.integration-field span { font-size: .7rem; }
+.integration-field input, .integration-field select { min-width: 0; width: 100%; padding: .45rem .6rem; border: 1px solid var(--ops-line); border-radius: .4rem; background: var(--ops-subtle); color: var(--ops-ink); }
+.integration-field input:disabled, .integration-field select:disabled { opacity: .65; }
+.integration-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .8rem; }
+@media (min-width: 700px) {
+  .integration-layout { grid-template-columns: 11rem minmax(0, 1fr); }
+  .integration-providers { grid-template-columns: minmax(0, 1fr); }
+  .integration-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .integration-field-wide { grid-column: 1 / -1; }
+}

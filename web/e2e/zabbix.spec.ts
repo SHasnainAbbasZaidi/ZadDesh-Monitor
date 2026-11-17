@@ -67,8 +67,10 @@ test('Zabbix settings and read-only device view', async ({ page, request }) => {
   await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
   await expect(page.getByRole('button', { name: /Total devices/ })).toContainText('3');
+  await page.getByRole('button', { name: 'Devices', exact: true }).click();
   await expect(page.getByRole('row').filter({ hasText: 'Zabbix-only switch' })).toContainText('Agent reporting');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('button', { name: 'API Integrations', exact: true }).click();
   await page.getByLabel('Zabbix URL').fill(url);
   await expect(page.getByText('HTTP sends the token unencrypted between ZadDesh and Zabbix.')).toBeVisible();
   const tokenField = page.getByLabel('Zabbix API token');

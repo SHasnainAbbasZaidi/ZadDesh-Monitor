@@ -1,29 +1,34 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { Mail, Settings as SettingsIcon } from 'lucide-react';
+import { Mail, Plug, Settings as SettingsIcon } from 'lucide-react';
 import { Card } from '../components/ui/Card';
 import { UserManagement } from '../components/ui/UserManagement';
-import { ZabbixSettings } from '../components/ui/Zabbix';
 import { api } from '../services/api';
 import type { SystemInfo } from '../types';
 
 const EmailAlerts = lazy(() => import('./EmailAlerts'));
+const ApiIntegrations = lazy(() => import('../components/ui/ApiIntegrations'));
 
 export function Settings({ emailSelected, onSelectEmail }: { emailSelected: boolean; onSelectEmail: (selected: boolean) => void }) {
+  const [integrationsSelected, setIntegrationsSelected] = useState(false);
   return <div className="space-y-6">
     <header>
       <p className="ops-eyebrow">Administration</p>
       <h1 className="ops-heading">System settings</h1>
-      {!emailSelected && <p className="ops-muted mt-2">Manage accounts and review the core runtime.</p>}
+      {!emailSelected && <p className="ops-muted mt-2">Manage accounts, API connections and the core runtime.</p>}
     </header>
-    <nav aria-label="Settings sections" className="flex flex-wrap gap-2">
-      <button className="ops-button" type="button" aria-pressed={!emailSelected} style={!emailSelected ? { borderColor: 'var(--ops-accent)' } : undefined} onClick={() => onSelectEmail(false)}>
+    <nav aria-label="Settings sections" className="settings-sections flex flex-wrap gap-2">
+      <button className="ops-button" type="button" aria-pressed={!emailSelected && !integrationsSelected} onClick={() => { setIntegrationsSelected(false); onSelectEmail(false); }}>
         <SettingsIcon size={16} aria-hidden="true" /> General
       </button>
-      <button className="ops-button" type="button" aria-pressed={emailSelected} style={emailSelected ? { borderColor: 'var(--ops-accent)' } : undefined} onClick={() => onSelectEmail(true)}>
+      <button className="ops-button" type="button" aria-pressed={!emailSelected && integrationsSelected} onClick={() => { setIntegrationsSelected(true); onSelectEmail(false); }}>
+        <Plug size={16} aria-hidden="true" /> API Integrations
+      </button>
+      <button className="ops-button" type="button" aria-pressed={emailSelected} onClick={() => onSelectEmail(true)}>
         <Mail size={16} aria-hidden="true" /> Email Alerts &amp; Notifications
       </button>
     </nav>
-    {emailSelected ? <Suspense fallback={<p role="status">Loading email notifications…</p>}><EmailAlerts /></Suspense> : <GeneralSettings />}
+    {emailSelected ? <Suspense fallback={<p role="status">Loading email notifications…</p>}><EmailAlerts /></Suspense>
+      : integrationsSelected ? <Suspense fallback={<p role="status">Loading API connections…</p>}><ApiIntegrations /></Suspense> : <GeneralSettings />}
   </div>;
 }
 
@@ -37,7 +42,6 @@ function GeneralSettings() {
   }, []);
   return <div className="space-y-6">
     <UserManagement />
-    <ZabbixSettings />
     {error && <p role="alert" className="ops-notice">Could not read runtime information from the core.</p>}
     <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
       <Card title="Runtime" subtitle={info ? 'Reported by the core' : error ? 'Unavailable' : 'Loading'}>
