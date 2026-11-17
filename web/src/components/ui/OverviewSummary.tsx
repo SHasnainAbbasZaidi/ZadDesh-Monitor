@@ -37,7 +37,7 @@ export function OverviewTiles({ stats, incidents, incidentLabel, fleetFailed, on
     { label: 'No availability data', value: stats?.unknown, color: 'mint', detail: 'Status unknown', action: onDevices },
     { label: 'Unmanaged', value: stats?.unmanaged, color: 'lavender', detail: 'Devices outside monitoring', action: onDevices },
   ];
-  return <section className="overview-tiles" aria-label="Infrastructure summary" aria-busy={!stats && !fleetFailed}>
+  return <section className="overview-tiles" aria-label="Infrastructure summary" tabIndex={0} aria-busy={!stats && !fleetFailed}>
     {tiles.map(({ label, value, color, detail, action }) => {
       const Item = action ? 'button' : 'div';
       return <Item key={label} type={action ? 'button' : undefined} className="overview-tile" data-color={color} onClick={action}>
@@ -90,9 +90,9 @@ export function OverviewDonuts({ fleet, fleetFailed, incidents }: {
     : share ? `${share} healthy` : fleet ? 'No devices configured' : 'Waiting for the monitoring API';
   const sourceSummary = fleetFailed ? fleet ? 'Last available inventory' : 'Inventory unavailable' : 'Combined monitoring inventory';
   const incidentSummary = incidents?.incomplete ? 'Partial incident data' : incidents ? `Showing ${incidents.entries.length} of ${incidents.total} current incidents` : 'Waiting for alert data';
-  return <div className="overview-donuts" aria-label="Monitoring breakdowns">
+  return <>
     <Donut id="fleet-title" title="Fleet health" summary={fleetSummary} slices={status} unit="devices" />
     <Donut id="device-sources-title" title="Devices by source" summary={sourceSummary} slices={sources} unit="devices" />
     <Donut id="incident-breakdown-title" title="Recent incidents by type" summary={incidentSummary} slices={recent} unit="shown" />
-  </div>;
+  </>;
 }

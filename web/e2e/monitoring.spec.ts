@@ -124,11 +124,12 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 768, height: 1024 
       await expect(page.getByRole('region', { name: 'Devices by source' })).toBeVisible();
       await expect(page.getByRole('region', { name: 'Recent incidents by type' })).toBeVisible();
       const [summaryBox, latencyBox, fleetBox] = await Promise.all([summary.boundingBox(), latency.boundingBox(), fleetHealth.boundingBox()]);
-      expect(fleetBox!.y).toBeGreaterThanOrEqual(latencyBox!.y + latencyBox!.height);
+      expect(latencyBox!.y).toBeGreaterThanOrEqual(summaryBox!.y + summaryBox!.height);
       if (viewport.width >= 1200) {
-        expect(latencyBox!.x).toBeGreaterThanOrEqual(summaryBox!.x + summaryBox!.width);
+        expect(fleetBox!.y).toBe(latencyBox!.y);
+        expect(fleetBox!.x).toBeGreaterThanOrEqual(latencyBox!.x + latencyBox!.width);
       } else {
-        expect(latencyBox!.y).toBeGreaterThanOrEqual(summaryBox!.y + summaryBox!.height);
+        expect(fleetBox!.y).toBeGreaterThanOrEqual(latencyBox!.y + latencyBox!.height);
       }
       await latency.getByLabel('Latency protocol').selectOption('http');
       const chooser = latency.getByLabel('Latency device');

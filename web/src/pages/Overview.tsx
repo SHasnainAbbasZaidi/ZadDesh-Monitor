@@ -112,12 +112,12 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
         <button className="ops-button" onClick={refreshDashboard}>Retry</button>
       </div>}
 
-      <div className="overview-top-grid">
-        <OverviewTiles stats={fleet?.stats} incidents={incidentData} incidentLabel={incidentLabel} fleetFailed={fleetFailed}
-          onDevices={onNavigateToDevices} onAlerts={onNavigateToAlerts} />
+      <OverviewTiles stats={fleet?.stats} incidents={incidentData} incidentLabel={incidentLabel} fleetFailed={fleetFailed}
+        onDevices={onNavigateToDevices} onAlerts={onNavigateToAlerts} />
+      <div className="overview-charts" aria-label="Monitoring charts">
         <OverviewLatency minutes={minutes} updatedAt={snapshot?.received.getTime()} />
+        <OverviewDonuts fleet={fleet} fleetFailed={fleetFailed} incidents={incidentData} />
       </div>
-      <OverviewDonuts fleet={fleet} fleetFailed={fleetFailed} incidents={incidentData} />
 
       <div className="dash-grid">
         <InfrastructureMonitoring fleet={fleet} sites={snapshot?.sites} refresh={fleetRefresh} onNavigate={onNavigateToDevices} />
