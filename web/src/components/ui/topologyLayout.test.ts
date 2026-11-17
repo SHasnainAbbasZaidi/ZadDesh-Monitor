@@ -3,6 +3,17 @@ import type { Diagram } from './NetworkGraph';
 import { deviceHeight, deviceWidth, expandedLayout } from './topologyLayout';
 
 describe('expanded topology', () => {
+  it('finds connected groups with no core name in Findings only', () => {
+    const nodes = ['Host A', 'Switch A', 'Host B', 'Switch B', 'Spare'].map((label, i) =>
+      ({ id: i + 1, label, kind: label.startsWith('Switch') ? 'switch' : 'server', status: 'up', alerts: 0 }));
+    const links = [[1, 2], [3, 4]].map(([source, target], id) =>
+      ({ id, source, target, source_port: '', target_port: '', method: 'lldp', status: 'up', confidence: 'high' }));
+    const diagram: Diagram = { id: 1, name: 'Lab', published: false, layout: {}, nodes, links };
+    expect(expandedLayout(diagram).zones.map(zone => zone.name)).toEqual(['Other devices']);
+    const { groupByNode } = expandedLayout({ ...diagram, findings: true });
+    expect([...groupByNode.values()]).toEqual(['Switch A', 'Switch A', 'Switch B', 'Switch B', 'Unlinked devices']);
+  });
+
   it('separates core neighborhoods and leaves room around every device', () => {
     const nodes = ['Core Switch A', 'Core Switch B', 'Access A', 'Access B', 'Unlinked'].map((label, i) =>
       ({ id: i + 1, label, kind: 'switch', status: 'up', alerts: 0 }));

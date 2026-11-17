@@ -17,7 +17,7 @@ function PortHealth({ port }: { port: Parameters<typeof linkHealth>[0] }) {
   const health = linkHealth(port);
   return <Badge status={health.tone}>{health.label}</Badge>;
 }
-type DiagramItem = Pick<Diagram, 'id' | 'name' | 'published' | 'automatic'>;
+type DiagramItem = Pick<Diagram, 'id' | 'name' | 'published' | 'automatic' | 'findings'>;
 type Run = { id: number; status: string; device: string; message?: string };
 type Change = { id: number; description: string; decision: string };
 
@@ -47,7 +47,9 @@ export default function NetworkDiagram() {
   const [locked, setLocked] = useState(true);
   const [positions, setPositions] = useState<Record<string, [number, number]>>({});
   const [fit, setFit] = useState(0);
-  const [expanded, setExpanded] = useState(true);
+  const [expandedByDiagram, setExpandedByDiagram] = useState<Record<number, boolean>>({});
+  const expanded = id === undefined || expandedByDiagram[id] !== false;
+  const setExpanded = (value: boolean) => { if (id !== undefined) setExpandedByDiagram(previous => ({ ...previous, [id]: value })); };
   const mapSvg = useRef<SVGSVGElement>(null);
   const inspector = useRef<HTMLElement>(null);
   const choseDiagram = useRef(false);
@@ -65,7 +67,7 @@ export default function NetworkDiagram() {
         if (controller.signal.aborted) return;
         setDiagrams(items);
         setId(current => choseDiagram.current ? current : items[0]?.id);
-        setChecks(candidates.filter(check => check.params.version === '3' && !check.params.credential));
+        setChecks(candidates.filter(check => !check.params.credential));
       }).catch(failure => { if (!controller.signal.aborted) setError(failure.message); });
     return () => controller.abort();
   }, [refresh]);
@@ -94,11 +96,16 @@ export default function NetworkDiagram() {
   }
 
   const activeGraph = graph?.id === id ? graph : undefined;
+  const findings = !!diagrams.find(item => item.id === id)?.findings;
+  const eligibleChecks = checks.filter(({ params }) => findings && params.version === '2c'
+    || params.version === '3' && (!params.security_level || params.security_level !== 'noAuthNoPriv'));
+  const eligibleSeeds = eligibleChecks.filter(check => seeds.includes(check.id)).map(check => check.id);
   const visible = activeGraph && search.trim() ? activeGraph.nodes.filter(node => node.label.toLowerCase().includes(search.trim().toLowerCase())) : activeGraph?.nodes;
   const nodesById = new Map(activeGraph?.nodes.map(node => [node.id, node]));
   const groups = activeGraph ? expandedLayout(activeGraph).groupByNode : undefined;
   const intersiteLinks = activeGraph?.links.filter(link => groups?.get(link.source) !== groups?.get(link.target)
-    && (link.speed === 10_000_000_000 || link.expected_speed === 10_000_000_000 || !!link.configured_vlans?.length)) ?? [];
+    && (link.speed === 10_000_000_000 || link.expected_speed === 10_000_000_000 || !!link.configured_vlans?.length
+      || (findings && !!link.discovered_vlans?.some(port => (port.egress_vlans?.length ?? 0) > 1)))) ?? [];
   const connections = selectedNode ? activeGraph?.links.flatMap(link => {
     if (link.source === selectedNode.id) return [{ link, local: link.source_port, remote: link.target_port, peer: nodesById.get(link.target) }];
     if (link.target === selectedNode.id) return [{ link, local: link.target_port, remote: link.source_port, peer: nodesById.get(link.source) }];
@@ -143,9 +150,9 @@ export default function NetworkDiagram() {
     <h1 className="ops-heading">Network Diagram</h1>
     {error && <p className="ops-notice" role="alert">{error}</p>}
     <Card><div className="flex flex-wrap items-end gap-3">
-      <label className="text-sm">Diagram<select className="dash-select block" value={id ?? ''} onChange={event => {
+      <label className="text-sm"><span id="topology-diagram-label">Diagram</span><select aria-labelledby="topology-diagram-label" className="dash-select block" value={id ?? ''} onChange={event => {
         choseDiagram.current = true;
-        setId(Number(event.target.value)); setPositions({}); setSelection(undefined); setSearch(''); setLocked(true);
+        setId(Number(event.target.value)); setPositions({}); setSelection(undefined); setSearch(''); setLocked(true); setSeeds([]);
       }}><option value="" disabled>Choose a diagram</option>{diagrams.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <form className="flex items-end gap-2" onSubmit={async event => {
         event.preventDefault();
@@ -162,24 +169,26 @@ export default function NetworkDiagram() {
     {!diagrams.some(item => item.automatic) && <p className="ops-muted text-sm">
       An automatic map appears after ZadDesh finds an enabled device check with a stored SNMPv3 credential and a permitted IP.
     </p>}
-    {id && <details className="dash-panel p-3"><summary className="cursor-pointer font-semibold text-sm">SNMPv3 discovery</summary>
+    {id && <details key={id} className="dash-panel p-3"><summary className="cursor-pointer font-semibold text-sm">{findings ? 'SNMPv2c and SNMPv3 discovery' : 'SNMPv3 discovery'}</summary>
       <div className="pt-3">
+      {findings && <p className="mb-3 text-sm ops-muted">Map discovery runs automatically for eligible devices. It groups connected devices using reported LLDP and CDP neighbors.</p>}
       {activeGraph?.automatic && <p className="mb-3 text-sm ops-muted">Saved SNMPv3 checks are queued automatically. Links appear when devices report LLDP or CDP neighbors.</p>}
       <div className="flex flex-wrap items-end gap-3">
-        <label className="text-sm">SNMPv3 seed checks<select className="dash-select block" multiple size={Math.min(5, Math.max(2, checks.length))}
+        <label className="text-sm">{findings ? 'SNMP seed checks' : 'SNMPv3 seed checks'}<select className="dash-select block" multiple size={Math.min(5, Math.max(2, eligibleChecks.length))}
           value={seeds.map(String)} onChange={event => setSeeds(Array.from(event.target.selectedOptions, option => Number(option.value)))}>
-          {checks.map(check => <option key={check.id} value={check.id}>{check.name} · {check.target}</option>)}
+          {eligibleChecks.map(check => <option key={check.id} value={check.id}>{check.name} · {check.target}{findings && ` · v${check.params.version}`}</option>)}
         </select></label>
-        <button className="ops-button" disabled={!seeds.length} onClick={() => void mutate(endpoint + '/discovery', 'POST', { checks: seeds })}>Run discovery now</button>
+        <button className="ops-button" disabled={!eligibleSeeds.length} onClick={() => void mutate(endpoint + '/discovery', 'POST', { checks: eligibleSeeds })}>Run discovery now</button>
       </div>
-      {!checks.length && <p className="ops-muted text-sm">Provision an enabled device check with stored SNMPv3 credentials first.</p>}
-      {runs.map(run => <p key={run.id} className="mt-2 text-sm"><Badge status={run.status} /> {run.device}{run.message ? ` · ${run.message}` : ''}</p>)}
+      {!eligibleChecks.length && <p className="ops-muted text-sm">Add an enabled device check with stored {findings ? 'SNMPv2c or authenticated SNMPv3' : 'SNMPv3'} credentials.</p>}
+      {activeGraph && runs.map(run => <p key={run.id} className="mt-2 text-sm"><Badge status={run.status} /> {run.device}{run.message ? ` · ${run.message}` : ''}</p>)}
       </div>
     </details>}
     {activeGraph && <section className="dash-panel" aria-label="Topology workspace">
       <div className="topology-toolbar">
         <div className="min-w-0 mr-auto"><h2 className="flex items-center gap-2 font-semibold"><Network size={17} aria-hidden="true" />{activeGraph.name}</h2>
-          <p className="ops-muted text-xs mt-1">{activeGraph.nodes.length} devices · {activeGraph.links.length} links</p></div>
+          <p className="ops-muted text-xs mt-1">{activeGraph.nodes.length} devices · {activeGraph.links.length} links</p>
+          {findings && activeGraph.nodes.some(node => node.cached_observation) && <p className="ops-muted text-xs mt-1">Includes saved SNMP observations awaiting a fresh poll</p>}</div>
         <div className="flex flex-wrap gap-1" aria-label="Link status legend">
           <Badge status="up">Online</Badge><Badge status="down">Down</Badge><Badge status="warning">Slow</Badge>
         </div>
@@ -246,7 +255,7 @@ export default function NetworkDiagram() {
         <Graph key={`${id}:${fit}`} diagram={canvasGraph ?? activeGraph} draggable={!locked} onSelect={inspect}
           onMove={!locked ? (node, point) => setPositions(previous => ({ ...previous, [node]: point })) : undefined}
           selectedNodeId={selectedNode?.id} height={610} exportGraph={exporter => { png.current = exporter; }} />
-      </Suspense> : <p className="ops-empty">{activeGraph.automatic
+      </Suspense> : <p className="ops-empty">{findings ? 'Waiting for the collector to return SNMP findings.' : activeGraph.automatic
         ? 'Waiting for successful SNMPv3 discovery results.'
         : 'Run discovery or add a node to populate this diagram.'}</p>}
         </div>
@@ -255,6 +264,8 @@ export default function NetworkDiagram() {
       {selectedNode && <div className="mt-4 space-y-2" aria-label="Node details">
         <h3 className="font-semibold">{selectedNode.label} · {selectedNode.kind}</h3>
         <p><Badge status={selectedNode.status} /> {selectedNode.ip} · {selectedNode.alerts} active alerts</p>
+        {findings && selectedNode.snmp_version && <p className="text-xs ops-muted">Polled with SNMPv{selectedNode.snmp_version}</p>}
+        {findings && selectedNode.cached_observation && <p className="text-xs ops-muted">From saved SNMP observations</p>}
         <section aria-label="Connected ports" className="space-y-2">
           <h4 className="text-sm font-semibold">Connected ports ({connections.length})</h4>
           {!connections.length && <p className="text-xs ops-muted">No links to named devices have been discovered or added.</p>}
@@ -288,6 +299,9 @@ export default function NetworkDiagram() {
         <p><PortHealth port={selectedLink} /> {selectedLink.method.toUpperCase()} · {selectedLink.confidence} confidence
           {selectedLink.speed != null && ` · ${selectedLink.speed.toLocaleString()} bps`}
           {selectedLink.utilization != null && ` · ${selectedLink.utilization.toFixed(1)}% utilization`}</p>
+        {selectedLink.reporting_ends != null && <p className="text-xs ops-muted">{
+          ['Previously observed', 'Reported by one end', 'Corroborated by both ends'][selectedLink.reporting_ends]
+        }</p>}
         {selectedLink.discovered_vlans?.map(port => <p key={port.node_id} className="text-xs ops-muted">
           <strong>{nodesById.get(port.node_id)?.label ?? 'Switch'}</strong>
           {port.pvid != null && ` · PVID ${port.pvid}`}

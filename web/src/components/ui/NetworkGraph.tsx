@@ -14,10 +14,11 @@ export type DiagramPort = PortVlans & { name: string; status: string; speed?: nu
   alias?: string; admin_status?: string; mtu?: number; in_errors?: number; out_errors?: number; in_discards?: number; out_discards?: number };
 export type Diagram = {
   automatic?: boolean;
+  findings?: boolean;
   id: number; name: string; published: boolean;
   layout: { mode?: string; positions?: Record<string, [number, number]> };
-  nodes: { id: number; label: string; status: string; kind: string; alerts: number; site_id?: number; ip?: string; device_id?: number; manual?: boolean; interfaces?: Record<string, DiagramPort> }[];
-  links: { id: number; source: number; target: number; source_port: string; target_port: string; method: string; confidence: string; status: string; speed?: number; expected_speed?: number | null; utilization?: number; manual?: boolean; configured_vlans?: number[]; discovered_vlans?: (PortVlans & { node_id: number })[] }[];
+  nodes: { id: number; label: string; status: string; kind: string; alerts: number; site_id?: number; ip?: string; device_id?: number; manual?: boolean; interfaces?: Record<string, DiagramPort>; snmp_version?: string; cached_observation?: boolean }[];
+  links: { id: number; source: number; target: number; source_port: string; target_port: string; method: string; confidence: string; status: string; speed?: number; expected_speed?: number | null; utilization?: number; manual?: boolean; reporting_ends?: number; configured_vlans?: number[]; discovered_vlans?: (PortVlans & { node_id: number })[] }[];
 };
 const nodeIcons: Record<string, string> = {
   router: 'diamond', switch: 'rect', firewall: 'triangle', ap: 'pin', server: 'roundRect',

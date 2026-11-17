@@ -292,18 +292,29 @@ fn topology_value(value: Value<'_>) -> Option<String> {
     }
 }
 
-pub async fn discover_topology(task: &CheckTask) -> Result<BTreeMap<String, String>, &'static str> {
-    if param(task, "version", "") != "3"
-        || !matches!(
-            param(task, "security_level", "authPriv"),
-            "authPriv" | "authNoPriv"
-        )
+pub async fn discover_topology(
+    task: &CheckTask,
+    findings: bool,
+) -> Result<BTreeMap<String, String>, &'static str> {
+    let v2c = findings && param(task, "version", "3") == "2c";
+    if !v2c
+        && (param(task, "version", "3") != "3"
+            || !matches!(
+                param(task, "security_level", "authPriv"),
+                "authPriv" | "authNoPriv"
+            ))
     {
         return Err("Discovery requires authenticated SNMPv3");
     }
     let mut session = tokio::time::timeout(Duration::from_secs(5), open_session(task))
         .await
-        .map_err(|_| "SNMPv3 session timed out")??;
+        .map_err(|_| {
+            if v2c {
+                "SNMPv2c session timed out"
+            } else {
+                "SNMPv3 session timed out"
+            }
+        })??;
     let mut values = BTreeMap::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(55);
     for root in TOPOLOGY_ROOTS {
@@ -324,7 +335,11 @@ pub async fn discover_topology(task: &CheckTask) -> Result<BTreeMap<String, Stri
                     continue;
                 }
                 _ if values.is_empty() => {
-                    return Err("SNMPv3 authentication failed or system MIB did not respond")
+                    return Err(if v2c {
+                        "SNMPv2c community rejected or system MIB did not respond"
+                    } else {
+                        "SNMPv3 authentication failed or system MIB did not respond"
+                    });
                 }
                 _ => break,
             };
@@ -373,7 +388,11 @@ pub async fn discover_topology(task: &CheckTask) -> Result<BTreeMap<String, Stri
         }
     }
     if values.is_empty() {
-        Err("SNMPv3 agent returned no readable system data")
+        Err(if v2c {
+            "SNMPv2c agent returned no readable system data"
+        } else {
+            "SNMPv3 agent returned no readable system data"
+        })
     } else {
         Ok(values)
     }

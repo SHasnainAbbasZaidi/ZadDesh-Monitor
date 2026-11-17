@@ -4,10 +4,11 @@ from secrets import token_hex
 from zaddesh_core.api.v1.network_diagram import schedule_inventory
 from zaddesh_core.config import settings
 from zaddesh_core.incidents import utc_now
-from zaddesh_core.models.infrastructure import Collector
+from zaddesh_core.models.alerts import Alert
+from zaddesh_core.models.infrastructure import Collector, Device
 from zaddesh_core.models.topology import TopologyLink, TopologyNode, TopologyRun
 from zaddesh_core.security import hash_token
-from zaddesh_core.topology import link_key, parse_interfaces
+from zaddesh_core.topology import link_key, merge_observation, parse_interfaces
 
 
 def test_snmp_interface_speed_baseline_and_bridge_vlan_mapping():
@@ -161,3 +162,84 @@ def test_saved_snmp_automatically_queues_one_map(client, db_session, admin_heade
     assert schedule_inventory(db_session, now + timedelta(minutes=4)) == 0
     assert schedule_inventory(db_session, now + timedelta(minutes=5)) == 1
     assert len(client.get(root, headers=admin_headers).json()) == 1
+
+
+def test_findings_builds_its_own_map_with_v2c_and_v3(client, db_session, admin_headers, monkeypatch):
+    monkeypatch.setattr(settings.features, "network_diagram_beta", True)
+    monkeypatch.setattr(settings.features, "incident_workspace", True)
+    monkeypatch.setattr(settings.features, "topology_allowed_ranges", ["192.0.2.0/24"])
+    monkeypatch.setattr(settings.security, "encryption_key", token_hex(32))
+    token, community = token_hex(32), token_hex(16)
+    db_session.add(Collector(name="findings-test", auth_token_hash=hash_token(token)))
+    db_session.commit()
+    collector_headers = {"Authorization": f"Bearer {token}"}
+    collector = "http://127.0.0.1/api/v1/collectors"
+    root = "/api/v1/network-diagram"
+
+    def add(name, ip, params, credentials):
+        response = client.post("http://127.0.0.1/api/v1/devices", headers=admin_headers, json={
+            "name": name, "ip": ip, "initial_check_types": [],
+            "initial_snmp": {"params": params, "credentials": credentials},
+        })
+        assert response.status_code == 201
+        return client.get(f"/api/v1/checks?device_id={response.json()['id']}", headers=admin_headers).json()[0]["id"]
+
+    v3 = add("Managed switch", "192.0.2.41", {"version": "3", "security_level": "authNoPriv"},
+             {"username": "findings-lab", "auth_password": token_hex(16)})
+    v2c = add("Legacy switch", "192.0.2.42", {"version": "2c"}, {"community": community})
+    now = utc_now()
+    assert schedule_inventory(db_session, now) == 1
+    [automatic] = client.get(root, headers=admin_headers).json()
+    auto_url = f"{root}/{automatic['id']}"
+    source = db_session.query(Device).filter_by(ip="192.0.2.41").one()
+    merge_observation(db_session, automatic["id"], source, {
+        "1.3.6.1.2.1.1.5.0": "Managed switch", "1.3.6.1.2.1.2.2.1.2.1": "Gi0/1",
+        "1.3.6.1.2.1.2.2.1.8.1": "1", "1.0.8802.1.1.2.1.3.7.1.3.1": "Gi0/1",
+        "1.0.8802.1.1.2.1.4.1.1.7.0.1.1": "Gi0/2", "1.0.8802.1.1.2.1.4.1.1.9.0.1.1": "Legacy switch",
+    })
+    db_session.commit()
+    saved_link = client.get(auto_url, headers=admin_headers).json()["links"][0]
+    assert client.put(f"{auto_url}/links/{saved_link['id']}", headers=admin_headers,
+                      json={**saved_link, "configured_vlans": [20]}).status_code == 204
+    assert client.put(f"{auto_url}/nodes/0", headers=admin_headers, json={"label": "Manually added node"}).status_code == 204
+    assert schedule_inventory(db_session, now, findings=True) == 2
+    assert schedule_inventory(db_session, now, findings=True) == 0
+    automatic, findings = client.get(root, headers=admin_headers).json()
+    assert automatic["automatic"] and not automatic["findings"]
+    assert findings["name"] == "ZadDesh Findings" and findings["findings"] and not findings["automatic"]
+    auto_url, findings_url = f"{root}/{automatic['id']}", f"{root}/{findings['id']}"
+    cached = client.get(findings_url, headers=admin_headers).json()
+    assert len(cached["nodes"]) == 2 and all(node["cached_observation"] for node in cached["nodes"])
+    assert cached["links"][0]["status"] == "unknown" and cached["links"][0]["reporting_ends"] == 0
+    assert cached["links"][0]["configured_vlans"] == []
+    assert client.post(auto_url + "/discovery", headers=admin_headers, json={"checks": [v2c]}).status_code == 422
+    assert client.patch(auto_url, headers=admin_headers, json={"layout": "site", "positions": {"1": [12, 34]}}).status_code == 200
+    original = client.get(auto_url, headers=admin_headers).json()
+    automatic_job = client.post(collector + "/topology-next", headers=collector_headers).json()
+    assert automatic_job["task"]["check_id"] == v3
+    assert client.post(collector + "/topology-next", headers=collector_headers).status_code == 204
+
+    for _ in range(2):
+        job = client.post(collector + "/topology-next/findings", headers=collector_headers).json()
+        legacy = job["task"]["check_id"] == v2c
+        assert job["task"]["params"]["version"] == ("2c" if legacy else "3")
+        if legacy:
+            assert job["task"]["snmp_credentials"]["community"] == community
+        local, remote = ("Gi0/2", "Gi0/1") if legacy else ("Gi0/1", "Gi0/2")
+        values = {"1.3.6.1.2.1.2.2.1.2.1": local, "1.3.6.1.2.1.2.2.1.8.1": "2",
+                  "1.0.8802.1.1.2.1.3.7.1.3.1": local, "1.0.8802.1.1.2.1.4.1.1.7.0.1.1": remote,
+                  "1.0.8802.1.1.2.1.4.1.1.9.0.1.1": "Managed switch" if legacy else "Legacy switch"}
+        result = client.post(f"{collector}/topology-result/{job['run_id']}", headers=collector_headers,
+                             json={"lease": job["lease"], "values": values})
+        assert result.status_code == 200 and result.json()["status"] == "complete"
+
+    response = client.get(findings_url, headers=admin_headers)
+    assert community not in response.text
+    graph = response.json()
+    assert graph["layout"]["mode"] == "expanded"
+    assert {node["snmp_version"] for node in graph["nodes"]} == {"2c", "3"}
+    assert all(not node["cached_observation"] for node in graph["nodes"])
+    [link] = graph["links"]
+    assert link["reporting_ends"] == 2 and link["status"] == "down"
+    assert db_session.query(Alert).count() == 0
+    assert client.get(auto_url, headers=admin_headers).json() == original

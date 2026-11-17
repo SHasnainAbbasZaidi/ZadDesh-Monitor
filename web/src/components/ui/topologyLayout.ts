@@ -12,21 +12,35 @@ export function expandedLayout(diagram: Diagram) {
     peers.get(link.source)?.add(link.target);
     peers.get(link.target)?.add(link.source);
   }
-  const roots = diagram.nodes.filter(node => /\bcore\b/i.test(node.label));
-  const queue = roots.map(node => node.id);
+  const queue = diagram.nodes.filter(node => /\bcore\b/i.test(node.label)).map(node => node.id);
   const owner = new Map(queue.map(id => [id, id]));
-  for (const id of queue) {
-    for (const peer of peers.get(id) ?? []) {
-      if (owner.has(peer)) continue;
-      owner.set(peer, owner.get(id)!);
-      queue.push(peer);
+  function assignNeighbors(start: number) {
+    for (let i = start; i < queue.length; i++) {
+      for (const peer of peers.get(queue[i]) ?? []) {
+        if (owner.has(peer)) continue;
+        owner.set(peer, owner.get(queue[i])!);
+        queue.push(peer);
+      }
+    }
+  }
+  assignNeighbors(0);
+  if (diagram.findings) {
+    const isNetworkDevice = (kind: string) => Number(['router', 'switch', 'firewall'].includes(kind));
+    const hubs = diagram.nodes.filter(node => !owner.has(node.id) && peers.get(node.id)?.size).sort((a, b) =>
+      isNetworkDevice(b.kind) - isNetworkDevice(a.kind)
+      || (peers.get(b.id)?.size ?? 0) - (peers.get(a.id)?.size ?? 0) || a.label.localeCompare(b.label));
+    for (const root of hubs) {
+      if (owner.has(root.id)) continue;
+      queue.push(root.id);
+      owner.set(root.id, root.id);
+      assignNeighbors(queue.length - 1);
     }
   }
 
   const byGroup = new Map<string, Diagram['nodes']>();
   for (const node of diagram.nodes) {
     const root = nodes.get(owner.get(node.id) ?? -1);
-    const key = node.site_id ? `Site ${node.site_id}` : root?.label ?? 'Other devices';
+    const key = node.site_id ? `Site ${node.site_id}` : root?.label ?? (diagram.findings ? 'Unlinked devices' : 'Other devices');
     const group = byGroup.get(key) ?? [];
     group.push(node);
     byGroup.set(key, group);

@@ -21,13 +21,25 @@ pub async fn run(config: CollectorConfig) {
         "{}/api/v1/collectors",
         config.server_url.trim_end_matches('/')
     );
+    tokio::join!(
+        run_jobs(&client, &base, &config.token, false),
+        run_jobs(&client, &base, &config.token, true)
+    );
+}
+
+async fn run_jobs(client: &reqwest::Client, base: &str, token: &str, findings: bool) {
+    let next_path = if findings {
+        "topology-next/findings"
+    } else {
+        "topology-next"
+    };
     let mut timer = tokio::time::interval(Duration::from_secs(5));
     timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         timer.tick().await;
         let Ok(response) = client
-            .post(format!("{base}/topology-next"))
-            .bearer_auth(&config.token)
+            .post(format!("{base}/{next_path}"))
+            .bearer_auth(token)
             .send()
             .await
         else {
@@ -39,19 +51,33 @@ pub async fn run(config: CollectorConfig) {
         let Ok(job) = response.json::<Job>().await else {
             continue;
         };
-        let result =
-            tokio::time::timeout(Duration::from_secs(65), discover_topology(&job.task)).await;
+        let result = tokio::time::timeout(
+            Duration::from_secs(65),
+            discover_topology(&job.task, findings),
+        )
+        .await;
         let payload = match result {
             Ok(Ok(values)) => serde_json::json!({ "lease": job.lease, "values": values }),
             Ok(Err(error)) => serde_json::json!({ "lease": job.lease, "error": error }),
             Err(_) => {
-                serde_json::json!({ "lease": job.lease, "error": "SNMPv3 discovery timed out" })
+                let error = if job
+                    .task
+                    .params
+                    .get("version")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("2c")
+                {
+                    "SNMPv2c discovery timed out"
+                } else {
+                    "SNMPv3 discovery timed out"
+                };
+                serde_json::json!({ "lease": job.lease, "error": error })
             }
         };
         for _ in 0..2 {
             if let Ok(response) = client
                 .post(format!("{base}/topology-result/{}", job.run_id))
-                .bearer_auth(&config.token)
+                .bearer_auth(token)
                 .json(&payload)
                 .send()
                 .await

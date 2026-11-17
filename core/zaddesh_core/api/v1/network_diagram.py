@@ -29,10 +29,12 @@ from zaddesh_core.models.infrastructure import Collector, Device, DeviceCredenti
 from zaddesh_core.models.system import Dashboard, Widget
 from zaddesh_core.models.topology import TopologyChange, TopologyDiagram, TopologyLink, TopologyNode, TopologyRun
 from zaddesh_core.security import allows_secret_transport, decrypt_secret
-from zaddesh_core.topology import MAC_ID, identifiable_neighbor, link_key, merge_observation
+from zaddesh_core.topology import MAC_ID, identifiable_neighbor, link_key, merge_observation, seed_findings
 
 logger = logging.getLogger(__name__)
 AUTOMATIC_DIAGRAM = "inventory"
+FINDINGS_DIAGRAM = "findings"
+FINDINGS_NAME = "ZadDesh Findings"
 DISCOVERY_QUEUE_LIMIT = 64
 DISCOVERY_REFRESH = timedelta(minutes=5)
 
@@ -72,8 +74,10 @@ def diagram(db, identifier, published=False):
 
 @router.get("")
 def diagrams(db: Session = Depends(get_db)):
-    return [{"id": item.id, "name": item.name, "published": item.published, "automatic": item.automatic_key is not None}
-            for item in db.query(TopologyDiagram).order_by(TopologyDiagram.automatic_key.is_(None),
+    return [{"id": item.id, "name": item.name, "published": item.published,
+             "automatic": item.automatic_key == AUTOMATIC_DIAGRAM, "findings": item.automatic_key == FINDINGS_DIAGRAM}
+            for item in db.query(TopologyDiagram).order_by((TopologyDiagram.automatic_key == AUTOMATIC_DIAGRAM).desc().nulls_last(),
+                                                           TopologyDiagram.automatic_key.is_(None),
                                                            TopologyDiagram.name).limit(200)]
 
 
@@ -82,6 +86,8 @@ def create_diagram(payload: DiagramCreate, user: User = Depends(admin), db: Sess
     item = TopologyDiagram(name=payload.name.strip(), layout={"mode": "hierarchical"})
     if not item.name:
         raise HTTPException(422, "Enter a diagram name")
+    if item.name.casefold() == FINDINGS_NAME.casefold():
+        raise HTTPException(422, "This name is reserved for SNMP findings")
     db.add(item)
     db.flush()
     audit(db, user, "topology.created", item.id, {})
@@ -126,11 +132,14 @@ def graph(db: Session, item: TopologyDiagram):
         else:
             links[key] = link, source, target
     return {"id": item.id, "name": item.name, "published": item.published, "layout": item.layout,
-            "automatic": item.automatic_key is not None,
+            "automatic": item.automatic_key == AUTOMATIC_DIAGRAM, "findings": item.automatic_key == FINDINGS_DIAGRAM,
             "nodes": [{"id": node.id, "label": node.label, "device_id": device.id if device else None,
                        "site_id": device.site_id if device else None, "ip": device.ip if device else None,
                        "status": device.status if device else "unmanaged", "alerts": alerts.get(device.id, 0) if device else 0,
-                       "kind": node.kind, "manual": node.manual, "interfaces": node.metadata_json.get("interfaces", {})}
+                       "kind": node.kind, "manual": node.manual, "interfaces": node.metadata_json.get("interfaces", {}),
+                       **({"snmp_version": node.metadata_json.get("snmp_version"),
+                           "cached_observation": bool(node.metadata_json.get("cached_observation"))}
+                          if item.automatic_key == FINDINGS_DIAGRAM else {})}
                       for node, device in rows],
             "links": [{"id": link.id, "source": source, "target": target,
                        "source_port": "" if MAC_ID.fullmatch(link.source_port.strip()) else link.source_port,
@@ -144,6 +153,10 @@ def graph(db: Session, item: TopologyDiagram):
                                             for key, port in link.evidence.items() if key.isdecimal() and isinstance(port, dict)
                                             and (port.get("egress_vlans") is not None or port.get("pvid") is not None)],
                        "configured_vlans": link.evidence.get("configured_vlans", [])}
+                       | ({"reporting_ends": len({canonical.get(int(key), int(key))
+                                                for key, port in link.evidence.items() if key.isdecimal()
+                                                and isinstance(port, dict) and port.get("present")})}
+                          if item.automatic_key == FINDINGS_DIAGRAM and not link.manual else {})
                       for link, source, target in links.values()]}
 
 
@@ -182,12 +195,13 @@ def allowed(address: str) -> bool:
     return not ip.is_unspecified and not ip.is_multicast and any(ip in network for network in ranges)
 
 
-def discoverable(check: Check, device: Device) -> bool:
+def discoverable(check: Check, device: Device, findings: bool = False) -> bool:
     params = check.params or {}
+    version = params.get("version", "3")
     return (check.is_enabled and device.is_monitored and check.check_type == "snmp"
             and check.target == device.ip and allowed(device.ip)
-            and params.get("version", "3") == "3"
-            and params.get("security_level", "authPriv") in {"authPriv", "authNoPriv"}
+            and ((findings and version == "2c") or (version == "3"
+                 and params.get("security_level", "authPriv") in {"authPriv", "authNoPriv"}))
             and isinstance(params.get("stored_credential_id"), int))
 
 
@@ -198,25 +212,34 @@ def lock_automatic_diagram(db: Session, item: TopologyDiagram) -> None:
     ))
 
 
-def schedule_inventory(db: Session, now: datetime) -> int:
-    checks_by_device: dict[int, int] = {}
+def schedule_inventory(db: Session, now: datetime, *, findings: bool = False) -> int:
+    checks_by_device: dict[int, Check] = {}
     for check, device in db.query(Check, Device).join(Device, Check.device_id == Device.id).filter(
         Check.check_type == "snmp", Check.is_enabled.is_(True), Device.is_monitored.is_(True),
     ).order_by(Check.id.desc()):
-        if device.id not in checks_by_device and discoverable(check, device):
-            checks_by_device[device.id] = check.id
-    if not checks_by_device:
+        preferred = checks_by_device.get(device.id)
+        if preferred and (not findings or preferred.params.get("version", "3") == "3"):
+            continue
+        if discoverable(check, device, findings) and (preferred is None or check.params.get("version", "3") == "3"):
+            checks_by_device[device.id] = check
+    if not checks_by_device and not findings:
         return 0
 
-    item = db.query(TopologyDiagram).filter_by(automatic_key=AUTOMATIC_DIAGRAM).first()
+    system_key = FINDINGS_DIAGRAM if findings else AUTOMATIC_DIAGRAM
+    item = db.query(TopologyDiagram).filter_by(automatic_key=system_key).first()
     if item is None:
-        item = TopologyDiagram(name="Automatic network map", automatic_key=AUTOMATIC_DIAGRAM,
-                               layout={"mode": "hierarchical"})
+        item = TopologyDiagram(name=FINDINGS_NAME if findings else "Automatic network map", automatic_key=system_key,
+                               layout={"mode": "expanded" if findings else "hierarchical"})
         db.add(item)
         db.flush()
         audit(db, None, "topology.created", item.id, {"automatic": True})
     else:
         lock_automatic_diagram(db, item)
+
+    if findings and not db.query(TopologyNode.id).filter_by(diagram_id=item.id).first():
+        previous = db.query(TopologyDiagram.id).filter_by(automatic_key=AUTOMATIC_DIAGRAM).first()
+        if previous:
+            seed_findings(db, previous.id, item.id)
 
     runs = db.query(TopologyRun).filter_by(diagram_id=item.id)
     pending = [identifier for identifier, in runs.with_entities(TopologyRun.check_id).filter(
@@ -226,7 +249,7 @@ def schedule_inventory(db: Session, now: datetime) -> int:
                   .group_by(TopologyRun.check_id).all())
     pending_checks = set(pending)
     cutoff = now - DISCOVERY_REFRESH
-    due = [identifier for identifier in checks_by_device.values()
+    due = [identifier for identifier in (check.id for check in checks_by_device.values())
            if identifier not in pending_checks and (identifier not in latest or latest[identifier] <= cutoff)]
     due.sort(key=lambda identifier: (identifier in latest, latest.get(identifier, now), identifier))
     due = due[:max(0, DISCOVERY_QUEUE_LIMIT - len(pending))]
@@ -238,18 +261,19 @@ def schedule_inventory(db: Session, now: datetime) -> int:
     return len(due)
 
 
-def schedule_inventory_once() -> None:
+def schedule_inventory_once(*, findings: bool = False) -> None:
     with SessionLocal() as db:
-        if schedule_inventory(db, utc_now()):
+        if schedule_inventory(db, utc_now(), findings=findings):
             notify_change()
 
 
 async def topology_loop(stop: asyncio.Event) -> None:
     while not stop.is_set():
-        try:
-            await asyncio.to_thread(schedule_inventory_once)
-        except (SQLAlchemyError, HTTPException) as error:
-            logger.warning("Automatic topology scheduling will retry (%s)", type(error).__name__)
+        for findings in (False, True):
+            try:
+                await asyncio.to_thread(schedule_inventory_once, findings=findings)
+            except (SQLAlchemyError, HTTPException) as error:
+                logger.warning("%s topology scheduling will retry (%s)", "Findings" if findings else "Automatic", type(error).__name__)
         try:
             await asyncio.wait_for(stop.wait(), 15)
         except asyncio.TimeoutError:
@@ -265,8 +289,10 @@ def queue_discovery(diagram_id: int, payload: Discovery, user: User = Depends(ad
     item = diagram(db, diagram_id)
     identifiers = set(payload.checks)
     rows = db.query(Check, Device).join(Device, Check.device_id == Device.id).filter(Check.id.in_(identifiers)).all()
-    if len(rows) != len(identifiers) or any(not discoverable(check, device) for check, device in rows):
-        raise HTTPException(422, "Each seed must use an enabled stored SNMPv3 credential and a permitted device IP")
+    findings = item.automatic_key == FINDINGS_DIAGRAM
+    if len(rows) != len(identifiers) or any(not discoverable(check, device, findings) for check, device in rows):
+        versions = "SNMPv2c or authenticated SNMPv3" if findings else "SNMPv3"
+        raise HTTPException(422, f"Each seed must use an enabled stored {versions} credential and a permitted device IP")
     if item.automatic_key:
         lock_automatic_diagram(db, item)
     pending = [identifier for identifier, in db.query(TopologyRun.check_id).filter(
@@ -294,15 +320,21 @@ def discovery_runs(diagram_id: int, db: Session = Depends(get_db)):
 
 
 @worker.post("/topology-next")
+@worker.post("/topology-next/findings")
 def next_job(request: Request, collector: Collector | None = Depends(verify_collector_token), db: Session = Depends(get_db)):
     if collector is None or not allows_secret_transport(request):
         raise HTTPException(403, "Individual collector authentication over HTTPS or loopback is required")
+    findings = request.url.path.endswith("/findings")
     now = utc_now()
     pending = or_(TopologyRun.status == "queued", (TopologyRun.status == "running") & (
         TopologyRun.started_at < now - timedelta(seconds=90)))
     query = db.query(TopologyRun, Check, Device).join(Check, TopologyRun.check_id == Check.id).join(
         Device, Check.device_id == Device.id,
-    ).filter(pending)
+    ).join(TopologyDiagram, TopologyRun.diagram_id == TopologyDiagram.id).filter(pending)
+    if findings:
+        query = query.filter(TopologyDiagram.automatic_key == FINDINGS_DIAGRAM)
+    else:
+        query = query.filter(or_(TopologyDiagram.automatic_key.is_(None), TopologyDiagram.automatic_key != FINDINGS_DIAGRAM))
     if collector.site_id is not None:
         query = query.filter(Device.site_id == collector.site_id)
     row = query.order_by(TopologyRun.id).first()
@@ -319,7 +351,7 @@ def next_job(request: Request, collector: Collector | None = Depends(verify_coll
     credential_id = params.pop("stored_credential_id", None)
     credential = db.query(DeviceCredential).filter_by(id=credential_id, device_id=device.id, credential_type="snmp").first()
     try:
-        if credential is None or not discoverable(check, device):
+        if credential is None or not discoverable(check, device, findings):
             raise ValueError
         secrets = json.loads(decrypt_secret(credential.encrypted_data))
     except (InvalidTag, RuntimeError, ValueError):
@@ -344,7 +376,9 @@ class JobResult(BaseModel):
                    "SNMP engine discovery failed", "Could not open SNMP session",
                    "SNMP credential is missing or invalid", "SNMP authentication password is too short",
                    "SNMP privacy password is too short", "Unsupported SNMP authentication protocol",
-                   "Unsupported SNMP privacy protocol", "Discovery requires authenticated SNMPv3"] | None = None
+                   "Unsupported SNMP privacy protocol", "Discovery requires authenticated SNMPv3",
+                   "SNMPv2c session timed out", "SNMPv2c community rejected or system MIB did not respond",
+                   "SNMPv2c agent returned no readable system data", "SNMPv2c discovery timed out"] | None = None
 
 
 @worker.post("/topology-result/{run_id}")
@@ -359,17 +393,20 @@ def submit_result(run_id: int, payload: JobResult, request: Request, collector: 
         return {"status": run.status}
     check = db.get(Check, run.check_id)
     device = db.get(Device, check.device_id) if check else None
-    if not check or not device or not discoverable(check, device) or (collector.site_id is not None and collector.site_id != device.site_id):
+    item = db.get(TopologyDiagram, run.diagram_id)
+    findings = item is not None and item.automatic_key == FINDINGS_DIAGRAM
+    if not check or not device or not discoverable(check, device, findings) or (collector.site_id is not None and collector.site_id != device.site_id):
         raise HTTPException(403, "The seed is no longer available to this collector")
     claimed = cast(CursorResult, db.execute(update(TopologyRun).where(TopologyRun.id == run.id, TopologyRun.status == "running",
                                                     TopologyRun.lease == payload.lease).values(status="processing"))).rowcount
     if not claimed:
         raise HTTPException(409, "Discovery lease is no longer current")
     if payload.error or not payload.values:
-        run.status, run.message = "failed", payload.error or "SNMPv3 discovery returned no data"
+        run.status, run.message = "failed", payload.error or ("SNMP discovery returned no data" if findings else "SNMPv3 discovery returned no data")
     else:
         db.query(TopologyDiagram).filter_by(id=run.diagram_id).with_for_update().one()
-        count = merge_observation(db, run.diagram_id, device, payload.values)
+        count = merge_observation(db, run.diagram_id, device, payload.values,
+                                  findings_version=check.params.get("version", "3") if findings else None)
         run.status, run.message = "complete", f"Collected {len(payload.values)} OIDs and observed {count} links"
     run.finished_at = utc_now()
     audit(db, None, "topology.discovery_finished", run.diagram_id, {"run_id": run.id, "status": run.status})

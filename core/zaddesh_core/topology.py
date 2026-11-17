@@ -198,7 +198,38 @@ def link_incident(db: Session, link: TopologyLink, device: Device, now: datetime
         db.add(Event(device_id=device.id, event_type="link_down", severity="critical", title=title, message=message, timestamp=now))
 
 
-def merge_observation(db: Session, diagram_id: int, device: Device, data: dict[str, str]) -> int:
+def seed_findings(db: Session, source_id: int, findings_id: int) -> None:
+    source_nodes = db.query(TopologyNode).filter_by(diagram_id=source_id, manual=False).all()
+    source_links = db.query(TopologyLink).filter_by(diagram_id=source_id, manual=False).filter(
+        TopologyLink.method.in_(("lldp", "cdp")),
+    ).all()
+    linked_ids = {identifier for link in source_links for identifier in (link.source_id, link.target_id)}
+    copies = {}
+    for node in source_nodes:
+        if not (node.metadata_json.get("sys_name") or node.id in linked_ids):
+            continue
+        interfaces = {index: {**port, "status": "unknown", "utilization": None}
+                      for index, port in node.metadata_json.get("interfaces", {}).items()}
+        copy = TopologyNode(diagram_id=findings_id, key=node.key, label=node.label, kind=node.kind, device_id=node.device_id,
+                            metadata_json={**node.metadata_json, "interfaces": interfaces, "cached_observation": True,
+                                           "snmp_version": "3" if node.metadata_json.get("sys_name") else None})
+        db.add(copy)
+        copies[node.id] = copy
+    db.flush()
+    for link in source_links:
+        source = copies.get(link.source_id)
+        target = copies.get(link.target_id)
+        if source is None or target is None:
+            continue
+        evidence = {str(copies[int(key)].id): {**port, "present": False, "status": "unknown", "utilization": None}
+                    for key, port in link.evidence.items() if key.isdecimal() and int(key) in copies and isinstance(port, dict)}
+        db.add(TopologyLink(diagram_id=findings_id, key=link_key(source.id, link.source_port, target.id, link.target_port),
+                            source_id=source.id, target_id=target.id, source_port=link.source_port, target_port=link.target_port,
+                            method=link.method, status="unknown", speed=link.speed, evidence=evidence))
+
+
+def merge_observation(db: Session, diagram_id: int, device: Device, data: dict[str, str], *,
+                      findings_version: str | None = None) -> int:
     now = utc_now()
     nodes = db.query(TopologyNode).filter_by(diagram_id=diagram_id).all()
     by_key = {item.key: item for item in nodes}
@@ -234,6 +265,8 @@ def merge_observation(db: Session, diagram_id: int, device: Device, data: dict[s
     sys_descr = data.get("1.3.6.1.2.1.1.1.0", "")
     interfaces = parse_interfaces(data, source.metadata_json.get("interfaces", {}), now)
     source.metadata_json = redact({"sys_name": sys_name, "sys_description": sys_descr, "interfaces": interfaces})
+    if findings_version:
+        source.metadata_json = {**source.metadata_json, "snmp_version": findings_version}
     if not source.manual:
         description = sys_descr.casefold()
         source.kind = next((kind for kind in ("switch", "router", "firewall", "printer", "ups", "server")
@@ -258,7 +291,7 @@ def merge_observation(db: Session, diagram_id: int, device: Device, data: dict[s
         link.evidence = evidence
         if old_status != link.status:
             change(db, diagram_id, "link_status", f"{source.label} {port} is {link.status}")
-            if settings.features.incident_workspace:
+            if findings_version is None and settings.features.incident_workspace:
                 anchor = db.get(TopologyNode, link.source_id)
                 inventory = db.get(Device, anchor.device_id) if anchor and anchor.device_id else None
                 if inventory:
