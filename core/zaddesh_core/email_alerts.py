@@ -23,7 +23,7 @@ CLOCK = Annotated[str, StringConstraints(pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0
 PENDING = ("queued", "retrying", "sending")
 QUEUE_LIMIT = 2000
 HISTORY_DAYS = 90
-VARIABLES = ("device_name", "device_ip", "device_category", "problem", "severity", "detected_at", "recovered_at",
+VARIABLES = ("device_name", "device_ip", "device_category", "interface_name", "problem", "severity", "detected_at", "recovered_at",
              "duration", "event_id", "device_status", "dashboard_link")
 PLACEHOLDER = re.compile(r"{{\s*([a-z_]+)\s*}}")
 
@@ -131,12 +131,19 @@ class RecipientInput(Input):
         return value
 
 
+class PortTarget(Input):
+    id: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
+    host_id: IDENTIFIER
+    name: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+
+
 class RuleInput(Input):
     name: NAME
     enabled: bool = True
     severities: list[SEVERITY] = Field(default_factory=lambda: [4, 5], min_length=1, max_length=6)
     categories: list[CATEGORY] = Field(default_factory=list, max_length=6)
     host_ids: list[IDENTIFIER] = Field(default_factory=list, max_length=100)
+    ports: list[PortTarget] = Field(default_factory=list, max_length=50)
     host_group_ids: list[IDENTIFIER] = Field(default_factory=list, max_length=100)
     tags: dict[NAME, Annotated[str, StringConstraints(max_length=200)]] = Field(default_factory=dict, max_length=20)
     problem_types: list[PROBLEM_TYPE] = Field(default_factory=list, max_length=11)
@@ -160,6 +167,9 @@ class RuleInput(Input):
         if not (self.opened or self.recovery or self.escalate_severity or self.escalation_minutes or self.reminder_minutes or self.repeat_minutes):
             raise ValueError("Enable at least one notification condition")
         self.recipient_ids = sorted(set(self.recipient_ids))
+        self.ports = list({port.id: port for port in self.ports}.values())
+        if self.host_ids and any(port.host_id not in self.host_ids for port in self.ports):
+            raise ValueError("Every selected port must belong to a host allowed by the rule")
         self.reminder_minutes = sorted(set(self.reminder_minutes))
         return self
 
@@ -208,6 +218,7 @@ class Simulation(Input):
     severity: SEVERITY = 4
     problem_type: PROBLEM_TYPE = "device_offline"
     host_ids: list[IDENTIFIER] = Field(default_factory=list, max_length=20)
+    ports: list[PortTarget] = Field(default_factory=list, max_length=1)
     host_group_ids: list[IDENTIFIER] = Field(default_factory=list, max_length=30)
     tags: dict[NAME, Annotated[str, StringConstraints(max_length=200)]] = Field(default_factory=dict, max_length=20)
     duration_minutes: int = Field(0, ge=0, le=525600)
@@ -236,10 +247,17 @@ def matching_recipient(rule, recipient, event):
             and (recipient["id"] in rule["recipient_ids"] or any(group.casefold() in groups for group in rule["groups"])))
 
 
+def matches_ports(rule, event):
+    targets = rule.get("ports", [])
+    ports = event.get("ports", [])
+    return not targets or (len(ports) == 1 and any(
+        (target["id"], target["host_id"]) == (ports[0]["id"], ports[0]["host_id"]) for target in targets))
+
+
 def matching_rule(rule, event, age):
     return (rule["enabled"] and age >= rule["minimum_minutes"] and event["severity"] in rule["severities"]
             and overlaps(rule["categories"], [event["category"]]) and overlaps(rule["host_ids"], event["host_ids"])
-            and overlaps(rule["host_group_ids"], event["host_group_ids"]) and overlaps(rule["problem_types"], [event["problem_type"]])
+            and matches_ports(rule, event) and overlaps(rule["host_group_ids"], event["host_group_ids"]) and overlaps(rule["problem_types"], [event["problem_type"]])
             and all(value in event["tags"].get(key, []) for key, value in rule["tags"].items()))
 
 
@@ -252,17 +270,18 @@ def scheduled_for(rule, recipient, config, event, now):
 
 def simulation_event(payload, now):
     return {**payload.model_dump(), "detected_at": now - payload.duration_minutes * 60, "event_id": "TEST",
+            "host_ids": list(set(payload.host_ids) | {port.host_id for port in payload.ports}),
             "tags": {key: [value] for key, value in payload.tags.items()}}
 
 
 def template_default(kind):
     label = {"critical": "Critical alert", "warning": "Infrastructure alert", "recovery": "Recovered",
              "escalation": "Escalated", "reminder": "Still active"}[kind]
-    lines = ["Device: {{device_name}} ({{device_ip}})", "Category: {{device_category}}", "Problem: {{problem}}",
+    lines = ["Device: {{device_name}} ({{device_ip}})", "Category: {{device_category}}", "Interface: {{interface_name}}", "Problem: {{problem}}",
              "Severity: {{severity}}", "Detected: {{detected_at}}", "Status: {{device_status}}",
              "Elapsed: {{duration}}", "Zabbix event: {{event_id}}", "Dashboard: {{dashboard_link}}"]
     if kind == "recovery":
-        lines.insert(6, "Recovered: {{recovered_at}}")
+        lines.insert(7, "Recovered: {{recovered_at}}")
     return {"subject": f"[{label}] {{{{device_name}}}} · {{{{problem}}}}", "text": f"{label}\n\n" + "\n".join(lines),
             "html": f"<h2>{label}</h2>" + "".join(f"<p>{line}</p>" for line in lines)}
 
@@ -273,6 +292,7 @@ def render(template, event, now, zone, test=False):
     end = event.get("resolved_at") or now
     minutes = max(0, (end - event["detected_at"]) // 60)
     values = {"device_name": event["name"] or "Unknown device", "device_ip": event["ip"] or "Unavailable",
+              "interface_name": ", ".join(port["name"] for port in event.get("ports", [])) or "Unavailable",
               "device_category": event["category"], "problem": event["problem"], "severity": SEVERITIES[event["severity"]],
               "detected_at": stamp(event["detected_at"]), "recovered_at": stamp(event.get("resolved_at")),
               "duration": f"{minutes // 60}h {minutes % 60}m", "event_id": event["event_id"],

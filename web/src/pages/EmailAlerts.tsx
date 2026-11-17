@@ -21,13 +21,14 @@ type SMTP = { host: string; port: number; encryption: string; auth: string; user
 type Employee = { id?: number; name: string; email: string; team: string; groups: string[]; enabled: boolean; severities: number[];
   host_group_ids: string[]; schedule: Schedule | null };
 type Rule = { id?: number; name: string; enabled: boolean; severities: number[]; categories: string[]; host_ids: string[];
-  host_group_ids: string[]; tags: Record<string, string>; problem_types: string[]; minimum_minutes: number; recipient_ids: number[];
+  ports?: PortTarget[]; host_group_ids: string[]; tags: Record<string, string>; problem_types: string[]; minimum_minutes: number; recipient_ids: number[];
   groups: string[]; schedule: Schedule | null; bypass_quiet: boolean; allow_duplicates: boolean; opened: boolean; recovery: boolean;
   escalate_severity: boolean; escalation_minutes: number | null; reminder_minutes: number[]; repeat_minutes: number | null };
 type EventInput = { name: string; ip: string; category: string; problem: string; severity: number; problem_type: string;
-  host_ids: string[]; host_group_ids: string[]; tags: Record<string, string>; duration_minutes: number };
+  host_ids: string[]; ports?: PortTarget[]; host_group_ids: string[]; tags: Record<string, string>; duration_minutes: number };
 type Template = { subject: string; text: string; html: string };
 type Option = { id: string; name: string };
+type PortTarget = { id: string; host_id: string; name: string };
 type Targets = { hosts: Option[]; groups: Option[] };
 type Workspace = { server: { config: SMTP | null; has_credential: boolean; health: string; last_test: number | null;
   last_poll: number | null; last_error: string | null; poll_error: string | null }; recipients: Employee[]; rules: Rule[];
@@ -191,6 +192,45 @@ function Tags({ value, change }: { value: string; change: (value: string) => voi
   return <Field label="Zabbix tags (one name=value per line)"><textarea className="dash-select w-full" rows={3} value={value} onChange={event => change(event.target.value)} /></Field>;
 }
 
+function PortPicker({ hosts, selected, change, single = false }: {
+  hosts: Option[]; selected: PortTarget[]; change: (ports: PortTarget[]) => void; single?: boolean;
+}) {
+  const [host, setHost] = useState(selected[0]?.host_id ?? '');
+  const [query, setQuery] = useState('');
+  const [result, setResult] = useState<{ host: string; ports: PortTarget[]; error?: string }>();
+  useEffect(() => {
+    if (!host) return;
+    const controller = new AbortController();
+    request<{ ports: PortTarget[] }>(`${endpoint}/targets/${host}/ports`, { signal: controller.signal })
+      .then(data => { if (!controller.signal.aborted) setResult({ host, ports: data.ports }); })
+      .catch(error => { if (!controller.signal.aborted) setResult({ host, ports: [], error: message(error) }); });
+    return () => controller.abort();
+  }, [host]);
+  const available = result?.host === host ? result : undefined;
+  const filtered = available?.ports.filter(port => port.name.toLowerCase().includes(query.trim().toLowerCase()));
+  return <fieldset className="space-y-3 rounded-lg border p-3" style={{ borderColor: 'var(--ops-line)' }}>
+    <legend className="px-1 text-sm font-semibold">{single ? 'Simulated switch port' : 'Switch ports (optional)'}</legend>
+    <Select label="Browse switch or Zabbix host" value={host} change={value => { setHost(value); setQuery(''); }}
+      options={[{ id: '', name: 'Select a switch' }, ...hosts]} />
+    {host && !available && <p role="status" className="ops-muted text-sm">Loading monitored interfaces…</p>}
+    {available?.error && <p role="alert" className="ops-notice">{available.error}</p>}
+    {available && !available.error && (available.ports.length ? <>
+      <Text label="Find a port" value={query} change={setQuery} placeholder="e.g. Te1/1/1" />
+      <div className="grid max-h-52 gap-2 overflow-y-auto rounded p-2 sm:grid-cols-2" aria-label="Monitored interfaces">
+        {filtered?.map(port => <Toggle key={port.id} label={port.name} checked={selected.some(target => target.id === port.id)}
+          change={checked => change(checked ? single ? [port] : [...selected, port] : selected.filter(target => target.id !== port.id))} />)}
+        {!filtered?.length && <p className="ops-muted text-sm">No ports match your search.</p>}
+      </div>
+    </> : <p className="ops-muted text-sm">Zabbix returned no monitored interfaces for this host.</p>)}
+    {selected.length > 0 && <ul className="flex flex-wrap gap-2" aria-label="Selected ports">{selected.map(port => <li key={port.id}>
+      <button type="button" className="ops-button" aria-label={`Remove port ${port.name}`} onClick={() => change(selected.filter(target => target.id !== port.id))}>
+        {hosts.find(item => item.id === port.host_id)?.name ?? `Host ${port.host_id}`} · {port.name} ×
+      </button>
+    </li>)}</ul>}
+    {!single && <p className="ops-muted text-xs">Choose ports for a rule limited to those interfaces. Select Link down and the trigger’s Zabbix severity to route uplink outages.</p>}
+  </fieldset>;
+}
+
 function Rules({ rules, recipients, targets, save, remove, busy, feedback }: { rules: Rule[]; recipients: Employee[]; targets: Targets;
   save: (rule: Rule) => Promise<boolean>; remove: (rule: Rule) => void; busy: boolean; feedback?: string }) {
   const [draft, setDraft] = useState<Rule>();
@@ -205,7 +245,8 @@ function Rules({ rules, recipients, targets, save, remove, busy, feedback }: { r
     {!rules.length && <p className="ops-muted text-sm">No routing rules configured.</p>}
     <ul className="space-y-2">{rules.map(rule => <li key={rule.id} className="dash-panel p-3 flex flex-wrap items-center justify-between gap-2">
       <div><strong>{rule.name}</strong> <Badge status={rule.enabled ? 'up' : 'unknown'}>{rule.enabled ? 'Enabled' : 'Disabled'}</Badge>
-        <p className="ops-muted text-sm">{rule.severities.map(level => severities[level]).join(', ')} · {rule.recipient_ids.length} employees · {rule.groups.length} groups</p></div>
+        <p className="ops-muted text-sm">{rule.severities.map(level => severities[level]).join(', ')} · {rule.recipient_ids.length} employees · {rule.groups.length} groups
+          {rule.ports?.length ? ` · ${rule.ports.length} selected ports` : ''}</p></div>
       <div className="flex gap-2"><button type="button" className="ops-button" onClick={() => edit(rule)}>Edit</button>
         <button type="button" className="ops-button" disabled={busy} onClick={() => remove(rule)}>Remove</button></div>
     </li>)}</ul>
@@ -236,6 +277,7 @@ function Rules({ rules, recipients, targets, save, remove, busy, feedback }: { r
           <NumberField label="Repeat reminder every (minutes)" value={draft.repeat_minutes} change={value => update('repeat_minutes', value)} min={5} max={10080} />
           <NumberField label="Escalate after (minutes)" value={draft.escalation_minutes} change={value => update('escalation_minutes', value)} min={1} max={10080} />
         </div>
+        <PortPicker hosts={targets.hosts} selected={draft.ports ?? []} change={ports => update('ports', ports)} />
         <p className="ops-muted text-xs">Empty host, group, category and problem filters match all values.</p>
         <ScheduleFields title="Rule schedule" value={draft.schedule} change={value => update('schedule', value)} />
         <div className="flex flex-wrap gap-3">
@@ -319,6 +361,7 @@ function Diagnostics({ data, targets, busy, test, send }: { data: Workspace; tar
       <Multiple label="Test email recipients" value={recipientIds} change={setRecipientIds}
         options={data.recipients.filter(item => item.enabled).map(item => ({id:String(item.id), name:`${item.name} (${item.email})`}))} />
     </div>
+    <PortPicker hosts={targets.hosts} selected={event.ports ?? []} change={ports => patch('ports', ports)} single />
     <div className="flex flex-wrap gap-2">
       <button type="button" className="ops-button" onClick={() => void run('preview')}>Preview test email</button>
       <button type="button" className="ops-button" onClick={() => void run('simulate')}>Simulate routing</button>

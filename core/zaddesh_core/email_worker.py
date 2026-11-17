@@ -15,8 +15,9 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from zaddesh_core.config import settings
 from zaddesh_core.database import SessionLocal
-from zaddesh_core.email_alerts import (HISTORY_DAYS, PENDING, QUEUE_LIMIT, matching_recipient, matching_rule, render,
+from zaddesh_core.email_alerts import (HISTORY_DAYS, PENDING, QUEUE_LIMIT, matches_ports, matching_recipient, matching_rule, render,
                                        scheduled_for, template_default)
+from zaddesh_core.email_ports import PORT_FIELDS, port_target
 from zaddesh_core.email_smtp import SMTPOutcome, smtp_operation
 from zaddesh_core.infrastructure_monitoring import classify, identifier, objects
 from zaddesh_core.models.email_alerts import EmailAttempt, EmailDelivery, EmailProblem, EmailRecipient, EmailRule, EmailSettings, EmailTemplate
@@ -29,7 +30,7 @@ POLL_SECONDS = 25
 SEND_SECONDS = 5
 LEASE_SECONDS = 600
 RECOVERY_WINDOW = 7 * 86400
-EVENT_FIELDS = ["eventid", "name", "severity", "clock", "suppressed", "r_eventid", "value"]
+EVENT_FIELDS = ["eventid", "objectid", "name", "severity", "clock", "suppressed", "r_eventid", "value"]
 PROBLEM_PATTERNS = (("vpn_failure", r"\bvpn\b|ipsec"), ("interface_errors", r"packet.loss|interface.*(?:error|discard)|flapping"),
                     ("link_down", r"\b(?:link|interface|wan|uplink)\b.*\b(?:down|failed)\b"),
                     ("service_stopped", r"service.*(?:stopped|not running|failed|down)"),
@@ -89,7 +90,28 @@ def zabbix_connection(db):
     return saved_api(db)
 
 
-def fetch_zabbix(db, since, cursor, active_ids):
+def attach_ports(api, events):
+    from zaddesh_core.api.v1.zabbix import visible
+
+    trigger_ids = sorted({str(row["objectid"]) for row in events if identifier(row.get("objectid"))})
+    ports_by_trigger = {}
+    try:
+        for batch in batches(trigger_ids, 50):
+            triggers = api.rows("trigger.get", {"triggerids": batch, "output": ["triggerid"], "selectItems": PORT_FIELDS})
+            for trigger in triggers:
+                trigger_id = str(trigger.get("triggerid"))
+                if trigger_id in batch and isinstance(trigger.get("items"), list):
+                    ports_by_trigger[trigger_id] = {port["id"]: {**port, "name": visible(port["name"], api.token)}
+                                                    for item in objects(trigger["items"]) if (port := port_target(item))}
+    except HTTPException:
+        return False
+    for row in events:
+        if (ports := ports_by_trigger.get(str(row.get("objectid")))) is not None:
+            row["_email_ports"] = list(ports.values())
+    return all(trigger_id in ports_by_trigger for trigger_id in trigger_ids)
+
+
+def fetch_zabbix(db, since, cursor, active_ids, pending_ports=None):
     from zaddesh_core.api.v1.zabbix import HOST_FIELDS
 
     with zabbix_connection(db) as api:
@@ -115,7 +137,8 @@ def fetch_zabbix(db, since, cursor, active_ids):
                                              "selectParentTemplates": ["name"], "hostids": batch}):
                 if str(row.get("hostid")) in batch:
                     inventory[str(row["hostid"])] = row
-        return new_events, updates, recovered, inventory, api.token
+        ports_ok = pending_ports is None or attach_ports(api, [*new_events, *(row for row in updates if str(row.get("eventid")) in pending_ports)])
+        return new_events, updates, recovered, inventory, api.token, ports_ok
 
 
 def context_for(row, inventory, token, detected_at):
@@ -172,7 +195,7 @@ def schedule_problem(db, config, problem, rules, recipients, now, capacity):
             accepted[row.address.casefold()].add(row.payload["rule_id"])
     for rule in rules:
         matches = matching_rule(rule, context, age)
-        if not rule["enabled"] or (not matches and not problem.resolved_at):
+        if not rule["enabled"] or not matches_ports(rule, context) or (not matches and not problem.resolved_at):
             continue
         for recipient in recipients:
             if capacity <= 0:
@@ -216,6 +239,8 @@ def observe(db, state, events, recovered, inventory, token, now, is_new, capacit
         problem.severity = severity
         problem.suppressed = str(row.get("suppressed")) == "1"
         problem.context = {**problem.context, "peak_severity": max(severity, problem.context.get("peak_severity", -1))}
+        if "_email_ports" in row:
+            problem.context = {**problem.context, "ports": row["_email_ports"]}
         recovery_id = str(row.get("r_eventid"))
         if recovery_id in recovered:
             stamp = event_time(recovered[recovery_id], now)
@@ -258,10 +283,13 @@ def poll_once(now=None):
             state.scan_from = max(state.scan_from, now if state.last_poll else 0)
         since, cursor = state.scan_from, state.cursor
         db.commit()
-        active = list(db.scalars(select(EmailProblem.event_id).where(EmailProblem.source == source, EmailProblem.resolved_at.is_(None))
-                                 .order_by(EmailProblem.observed_at, EmailProblem.event_id).limit(200)))
+        active = db.execute(select(EmailProblem.event_id, EmailProblem.context).where(EmailProblem.source == source,
+            EmailProblem.resolved_at.is_(None)).order_by(EmailProblem.observed_at, EmailProblem.event_id).limit(200)).all()
+        rules = configured_items(db, EmailRule)
+        pending_ports = {event_id for event_id, context in active if "ports" not in context} if any(
+            rule["enabled"] and rule.get("ports") for rule in rules) else None
         try:
-            events, updates, recovery, inventory, token = fetch_zabbix(db, since, cursor, active)
+            events, updates, recovery, inventory, token, ports_ok = fetch_zabbix(db, since, cursor, [event_id for event_id, _ in active], pending_ports)
         except HTTPException:
             db.rollback()
             db.execute(update(EmailSettings).where(EmailSettings.id == 1, EmailSettings.generation == generation,
@@ -288,7 +316,11 @@ def poll_once(now=None):
             problem.observed_at = now
             capacity = schedule_problem(db, state.config, problem, rules, recipients, now, capacity)
         state.poll_after, state.last_poll = now + POLL_SECONDS, now
-        state.poll_error = "Notification queue or event intake is full. Intake will resume as capacity opens." if len(intake) < len(events) else None
+        state.poll_error = None
+        if len(intake) < len(events):
+            state.poll_error = "Notification queue or event intake is full. Intake will resume as capacity opens."
+        elif not ports_ok:
+            state.poll_error = "Could not read interface items for some Zabbix triggers. Check trigger.get API permissions."
         db.commit()
 
 
@@ -396,8 +428,8 @@ def send_once(now=None):
                 db.commit()
                 return
             event = {**problem.context, "severity": problem.severity}
-            if notice.kind != "recovery" and not (matching_rule(rule.config, event, (now - event["detected_at"]) // 60)
-                and matching_recipient(rule.config, {**recipient.config, "id": recipient.id}, event)):
+            if not matches_ports(rule.config, event) or (notice.kind != "recovery" and not (matching_rule(rule.config, event, (now - event["detected_at"]) // 60)
+                and matching_recipient(rule.config, {**recipient.config, "id": recipient.id}, event))):
                 notice.status, notice.last_error = "cancelled", "The current rule or recipient filters no longer match"
                 db.commit()
                 return

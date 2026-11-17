@@ -20,6 +20,7 @@ from zaddesh_core.email_alerts import (KIND, QUEUE_LIMIT, SEVERITIES, VARIABLES,
                                        ServerInput, Simulation, TemplateInput, matching_recipient, matching_rule, render,
                                        scheduled_for, simulation_event, template_default)
 from zaddesh_core.email_smtp import smtp_operation
+from zaddesh_core.email_ports import monitored_ports
 from zaddesh_core.email_worker import configured_items, config_lock, credential_for, make_delivery, pending_count
 from zaddesh_core.models.auth import AuditLog, User
 from zaddesh_core.models.email_alerts import EmailAttempt, EmailDelivery, EmailRecipient, EmailRule, EmailSettings, EmailTemplate
@@ -201,7 +202,19 @@ def save_rule(db, user, payload, item_id=None):
     if not set(payload.recipient_ids) <= employee_ids or not {name.casefold() for name in payload.groups} <= groups:
         raise HTTPException(422, "Select employees or notification groups that exist in the recipient directory")
     record = find(db, EmailRule, item_id) if item_id else EmailRule()
-    record.config = payload.model_dump()
+    config = payload.model_dump()
+    existing_ports = {port["id"]: port for port in (record.config or {}).get("ports", [])}
+    requested = config["ports"]
+    new_hosts = {port["host_id"] for port in requested if port["id"] not in existing_ports}
+    if new_hosts:
+        with saved_api(db) as api:
+            for host in sorted(new_hosts):
+                existing_ports.update({port["id"]: {**port, "name": visible(port["name"], api.token)}
+                                       for port in monitored_ports(api, host)})
+    if any(port["id"] not in existing_ports or existing_ports[port["id"]]["host_id"] != port["host_id"] for port in requested):
+        raise HTTPException(422, "Select interfaces currently monitored on the chosen Zabbix hosts")
+    config["ports"] = [existing_ports[port["id"]] for port in requested]
+    record.config = config
     db.add(record)
     db.flush()
     audit(db, user, "rule_updated", record.id)
@@ -236,6 +249,12 @@ def targets(db: Session = Depends(get_db)):
             rows = api.rows(method, {"output": [identifier, "name"], "sortfield": "name" if label == "groups" else "host", "limit": 1000})
             result[label] = [{"id": str(row[identifier]), "name": visible(row.get("name"), api.token)} for row in rows if identifier in row]
         return result
+
+
+@router.get("/targets/{host_id}/ports")
+def target_ports(host_id: Annotated[str, Field(pattern=r"^[0-9]{1,20}$")], db: Session = Depends(get_db)):
+    with saved_api(db) as api:
+        return {"ports": [{**port, "name": visible(port["name"], api.token)} for port in monitored_ports(api, host_id)]}
 
 
 @router.put("/templates/{kind}")

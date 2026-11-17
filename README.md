@@ -115,6 +115,8 @@ Administrators can configure the SMTP server, add employees and team memberships
 
 Use the **Time zone** field for quiet hours, employee schedules, and daily history counts. The background worker begins with Zabbix trigger events created since automatic notifications were enabled. It sends recovery emails only after Zabbix confirms a recovery event, to eligible recipients whose earlier message was SMTP-accepted. **Skip recipients already queued or notified by native Zabbix email** uses the saved token's alert and media-type permissions. The worker delays affected mail when it cannot verify that check.
 
+In **Alert Rules & Conditions**, use **Switch ports** to restrict a rule to monitored interfaces. Select **Link down** and the severities your Zabbix templates use for uplink outages. The worker identifies the interface from the original trigger's items. A rule with port selections requires a single identifiable interface, so triggers that cover multiple ports need a broader rule.
+
 SMTP-accepted status records the receiving mail server's response. Inspect SMTP server logs before manually retrying an interrupted or ambiguous attempt. Notification history is retained for 90 days and pending delivery is capped at 2,000 messages. Run the core's Alembic migrations before starting an upgraded installation.
 
 ## Overview infrastructure monitoring

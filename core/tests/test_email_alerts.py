@@ -21,7 +21,8 @@ from zaddesh_core import email_worker, main
 from zaddesh_core.api.v1.email_alerts import csv_text
 from zaddesh_core.config import settings
 from zaddesh_core.database import Base, get_db
-from zaddesh_core.email_alerts import RecipientInput, RuleInput, ServerConfig, scheduled
+from zaddesh_core.email_alerts import RecipientInput, RuleInput, ServerConfig, matches_ports, scheduled
+from zaddesh_core.email_ports import port_target
 from zaddesh_core.email_smtp import smtp_operation
 from zaddesh_core.models.email_alerts import EmailAttempt, EmailDelivery, EmailRecipient, EmailRule, EmailSettings
 from zaddesh_core.models.auth import User
@@ -141,6 +142,54 @@ def test_overnight_schedule():
     assert not scheduled(schedule, datetime(2026, 11, 17, 9, tzinfo=zone))
 
 
+def test_port_scope_uses_exact_host_and_interface_identity():
+    status = {"hostid": "11", "key_": "net.if.status[ifOperStatus.42]", "name": "Interface Te1/1/1(Uplink): Operational status"}
+    same = {"hostid": "11", "key_": "net.if.in[ifHCInOctets.42]", "name": "Interface Te1/1/1(New alias): Bits received"}
+    target = port_target(status)
+    other_port = port_target({**status, "name": "Interface Te1/1/10: Operational status"})
+    other_host = port_target({**status, "hostid": "12"})
+    rule = {"ports": [target]}
+    assert target == port_target(same)
+    assert matches_ports(rule, {"ports": [target]})
+    assert not matches_ports(rule, {"ports": [other_port]})
+    assert not matches_ports(rule, {"ports": [other_host]})
+    assert not matches_ports(rule, {"ports": [target, other_port]})
+    assert not matches_ports(rule, {})
+    assert matches_ports({}, {})
+
+
+def test_only_real_monitored_ports_can_be_saved(client, admin_headers, viewer_headers, monkeypatch):
+    from zaddesh_core.api.v1 import email_alerts as routes
+
+    item = {"hostid": "11", "key_": "net.if.status[ifOperStatus.42]", "name": "Interface Te1/1/1: Operational status"}
+
+    class Zabbix:
+        token = token_hex(16)
+
+        def rows(self, method, params):
+            assert method == "item.get"
+            return [item] if params["hostids"] == ["11"] else []
+
+    @contextmanager
+    def saved(_):
+        yield Zabbix()
+
+    monkeypatch.setattr(routes, "saved_api", saved)
+    root = "/api/v1/email-alerts"
+    picker = root + "/targets/11/ports"
+    assert client.get(picker, headers=viewer_headers).status_code == 403
+    [port] = client.get(picker, headers=admin_headers).json()["ports"]
+    recipient = client.post(root + "/recipients", headers=admin_headers,
+                            json={"name": "IT operator", "email": "port-operator@example.com"}).json()
+    rule = {"name": "Notify on core uplink", "recipient_ids": [recipient["id"]], "ports": [port]}
+    assert client.post(root + "/rules", headers=admin_headers, json={**rule, "ports": [{**port, "host_id": "12"}]}).status_code == 422
+    saved_rule = client.post(root + "/rules", headers=admin_headers, json=rule)
+    assert saved_rule.status_code == 201 and saved_rule.json()["ports"] == [port]
+    assert client.post(root + "/simulate", headers=admin_headers, json={}).json()["matches"] == []
+    simulated = client.post(root + "/simulate", headers=admin_headers, json={"ports": [port]}).json()["matches"]
+    assert simulated[0]["recipients"][0]["email"] == "port-operator@example.com"
+
+
 def tls_receiver(tmp_path, monkeypatch):
     now = datetime.now(timezone.utc)
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -213,8 +262,10 @@ def test_zabbix_lifecycle_multiple_recipients_retry_and_restart(tmp_path, monkey
     monkeypatch.setattr(email_worker, "SessionLocal", sessions)
     now = 1_795_000_000
     source = "http://192.0.2.9/api_jsonrpc.php"
-    event = {"eventid": "100", "clock": str(now), "value": "1", "name": "Core uplink down", "severity": "4", "r_eventid": "0", "suppressed": "0",
+    event = {"eventid": "100", "objectid": "501", "clock": str(now), "value": "1", "name": "Core uplink down", "severity": "4", "r_eventid": "0", "suppressed": "0",
              "hosts": [{"hostid": "11", "name": "Core switch"}], "tags": [{"tag": "team", "value": "network"}]}
+    port_item = {"hostid": "11", "key_": "net.if.status[ifOperStatus.42]", "name": "Interface Te1/1/1: Operational status"}
+    other_port = {**port_item, "key_": "net.if.status[ifOperStatus.43]", "name": "Interface Te1/1/10: Operational status"}
     state = {"recovery": False, "missing": False}
 
     class Zabbix:
@@ -224,12 +275,14 @@ def test_zabbix_lifecycle_multiple_recipients_retry_and_restart(tmp_path, monkey
             if method == "host.get":
                 return [{"hostid": "11", "name": "Core switch", "hostgroups": [{"groupid": "9"}],
                          "interfaces": [{"ip": "192.0.2.2", "main": "1"}]}]
+            if method == "trigger.get":
+                return [{"triggerid": trigger, "items": [port_item if trigger == "501" else other_port]} for trigger in params["triggerids"]]
             assert method == "event.get"
             if params.get("value") == 0:
                 return [{"eventid": "200", "clock": str(now + 321), "value": "0"}] if state["recovery"] else []
             if state["missing"] or "eventid_from" in params:
                 return []
-            return [dict(event)]
+            return [dict(event), {**event, "eventid": "101", "objectid": "502"}] if params.get("time_from") else [dict(event)]
 
     @contextmanager
     def saved(_):
@@ -244,7 +297,8 @@ def test_zabbix_lifecycle_multiple_recipients_retry_and_restart(tmp_path, monkey
             for index in (1, 2):
                 recipient = RecipientInput(email=f"operator{index}@example.com", name=f"Operator {index}", groups=["Network Team"])
                 db.add(EmailRecipient(address_key=recipient.email, config=recipient.model_dump()))
-            rule = RuleInput(name="Core connectivity", groups=["Network Team"], host_group_ids=["9"], reminder_minutes=[5], tags={"team": "network"})
+            rule = RuleInput(name="Core connectivity", groups=["Network Team"], host_group_ids=["9"], reminder_minutes=[5], tags={"team": "network"},
+                             ports=[port_target(port_item)])
             db.add_all([EmailRule(config=rule.model_dump()), EmailRule(config=rule.model_dump())])
         email_worker.poll_once(now)
         email_worker.send_once(now + 1)
@@ -278,5 +332,6 @@ def test_zabbix_lifecycle_multiple_recipients_retry_and_restart(tmp_path, monkey
             assert [item.kind for item in notices] == ["opened"] * 2 + ["escalation"] * 2 + ["reminder"] * 2 + ["recovery"] * 2
             assert all(item.status == "sent" for item in notices)
         assert len(smtp.received) == 8
+        assert all(b"Te1/1/1" in message and b"Te1/1/10" not in message for message in smtp.received)
         assert len({message.split(b"Message-ID: ")[1].split(b"\r\n", 1)[0] for message in smtp.received}) == 8
     engine.dispose()
