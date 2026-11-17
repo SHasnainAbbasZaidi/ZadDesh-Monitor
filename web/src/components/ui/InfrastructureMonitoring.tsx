@@ -208,12 +208,12 @@ function Card({ device, weights, onOpen }: { device: Device; weights: Record<Res
     preview.current.style.top = `${Math.max(8, Math.min(preferredTop, window.innerHeight - height - 8))}px`;
   }, [anchor]);
   return <div className="infra-card-wrapper" onMouseLeave={() => setAnchor(undefined)}>
-    <button className="infra-device-card" type="button" data-level={usageTone(usage.score)} data-status={tone}
+    <button className="infra-device-card" type="button" data-status={tone}
       aria-describedby={anchor ? previewId : undefined} onClick={() => { setAnchor(undefined); onOpen(); }}
       onMouseEnter={event => setAnchor(event.currentTarget.getBoundingClientRect())}
       onFocus={event => setAnchor(event.currentTarget.getBoundingClientRect())} onBlur={() => setAnchor(undefined)}
       onKeyDown={event => { if (event.key === 'Escape') setAnchor(undefined); }}>
-      <span className="infra-device-name"><strong>{device.name}</strong><span className="font-mono ops-muted">{device.ip || 'No IP reported'}</span><Badge status={tone}>{status}</Badge></span>
+      <span className="infra-device-name"><strong>{device.name}</strong><span className="font-mono ops-muted">{device.ip || 'No IP reported'}</span><span className="sr-only">{status}</span></span>
       <span className="infra-scores">
         <span data-level={usageTone(usage.score)}><small>Usage</small><strong>{pct(usage.score)}</strong></span>
         <span data-level={healthTone(device.health)}><small>Health</small><strong>{pct(device.health)}</strong></span>
