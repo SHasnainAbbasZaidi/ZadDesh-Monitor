@@ -109,6 +109,17 @@ The script makes a consistent SQLite backup, copies every table to a separate Mo
 
 Supported operations are GET, GETNEXT, GETBULK (v2c/v3) and a bounded 64-object WALK. Numeric samples appear under `snmp.<numeric OID>` and in the device telemetry view. Counter rates, traps and MIB name lookup are separate, unavailable features.
 
+## Overview infrastructure monitoring
+
+The Infrastructure Device Monitoring section uses the saved Zabbix connection. It shows a usage estimate from fresh CPU, memory, and interface measurements, plus a separate health estimate based on confirmed availability, monitoring coverage, and problems. Detailed history is available to administrators. Category overrides are saved per user in the current browser.
+
+The core accepts these optional environment variables for this section.
+
+- `ZADDESH_INFRA_REFRESH_SECONDS` sets the summary cache and refresh interval. The default is 25 seconds, with a supported range of 15 to 300 seconds.
+- `ZADDESH_INFRA_NETWORK_POLICY` accepts `busiest` (default) or `uplinks`.
+- `ZADDESH_INFRA_WEIGHTS_NETWORK`, `ZADDESH_INFRA_WEIGHTS_SERVERS`, `ZADDESH_INFRA_WEIGHTS_ROUTERS`, `ZADDESH_INFRA_WEIGHTS_FIREWALLS`, `ZADDESH_INFRA_WEIGHTS_CCTV`, and `ZADDESH_INFRA_WEIGHTS_OTHER_DEVICES` accept a JSON object such as `{"cpu":40,"memory":30,"network":30}`. Missing measurements are excluded before normalizing weights.
+- `ZADDESH_INFRA_PENALTIES` accepts a JSON object such as `{"hardware":35,"uplink":25,"errors":15,"pressure":10,"warning":5}`.
+
 ## Isolated demo
 
 Set `ZADDESH_DEMO_MODE=true`, `ZADDESH_DATABASE__URL=sqlite:///./zaddesh-demo.db`, and a unique `ZADDESH_DEMO_PASSWORD` of at least 16 characters. Run `scripts\dev.ps1 -Seed` on Windows or `bash scripts/dev.sh seed` on Linux, then start the core with the same demo mode and database settings. Sign in as `admin` with the password you set. The dashboard labels the sample data and collection is disabled. To return to live monitoring, unset the demo settings and launch the core again. Seeding does not overwrite a populated database.

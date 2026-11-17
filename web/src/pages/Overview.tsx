@@ -3,6 +3,7 @@ import { Activity, ArrowRight, Bell, CircleCheck, CircleHelp, CircleX, Clock3, N
 import { Badge } from '../components/ui/Badge';
 import { EntryDetails, incidentTitle } from '../components/ui/EntryDetails';
 import { OverviewLatency } from '../components/ui/OverviewLatency';
+import { InfrastructureMonitoring } from '../components/ui/InfrastructureMonitoring';
 import { RollingCount } from '../components/ui/RollingCount';
 import { api, request } from '../services/api';
 import { useLiveUpdates } from '../services/live';
@@ -54,7 +55,6 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
   const [fleetFailed, setFleetFailed] = useState(false);
   const [pausedIncidents, setPausedIncidents] = useState<IncidentPreviewSummary>();
   const [minutes, setMinutes] = useState(60);
-  const [siteFilter, setSiteFilter] = useState('all');
   const connection = useLiveUpdates(() => setRefresh(value => value + 1), paused);
 
   useEffect(() => {
@@ -111,9 +111,6 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
   const stats = fleet?.stats;
   const total = stats?.total_devices ?? 0;
   const issue = stats ? stats.down + stats.warning : 0;
-  const devices = fleet?.devices ?? [];
-  const sites = new Map(snapshot?.sites.map(site => [site.id, site.name]));
-  const visibleDevices = devices.filter(device => siteFilter === 'all' || String(device.site_id ?? 'unassigned') === siteFilter);
   const live = !paused && !failed && connection === 'connected';
   const healthyShare = stats && total ? `${new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(stats.up / total)} healthy` : undefined;
 
@@ -191,35 +188,7 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
           </div>
         </section>
 
-        <section className="dash-panel self-start" aria-labelledby="devices-title">
-          <header className="dash-panel-head">
-            <div><h2 id="devices-title"><Server size={16} /> Device inventory</h2>
-              <p>Last reported device status by site</p></div>
-            {onNavigateToDevices && <button className="ops-button" onClick={onNavigateToDevices}>View devices <ArrowRight size={14} /></button>}
-          </header>
-          <div className="dash-panel-body">
-            {devices.length > 0 && <div className="dash-inventory-controls">
-              <select aria-label="Filter devices by site" value={siteFilter} className="dash-select" onChange={event => setSiteFilter(event.target.value)}>
-                <option value="all">All sites</option>
-                {snapshot?.sites.map(site => <option key={site.id} value={site.id}>{site.name}</option>)}
-                <option value="unassigned">Unassigned</option>
-              </select>
-              <span className="ops-muted text-xs">{visibleDevices.length} shown</span>
-            </div>}
-            {visibleDevices.length ? <table className="dash-table dash-inventory-table">
-              <thead><tr><th scope="col">Device</th><th scope="col">Site</th><th scope="col">Status</th></tr></thead>
-              <tbody>{visibleDevices.map(device => <tr key={device.id}>
-                <td><strong>{device.name}</strong><span className="font-mono">{device.ip}</span></td>
-                <td>{sites.get(device.site_id ?? -1) ?? 'Unassigned'}</td>
-                <td><Badge status={device.status}>{device.status_label ?? (device.status === 'unknown' ? 'No availability data' : device.status)}</Badge></td>
-              </tr>)}</tbody>
-            </table> : <div className="dash-empty">
-              <Server size={21} /><strong>{fleet ? devices.length ? 'No devices in this site' : 'Your inventory is empty'
-                : fleetFailed ? 'Device inventory unavailable' : 'Waiting for device inventory'}</strong>
-              {onNavigateToDevices && fleet && !devices.length && <button className="ops-button" onClick={onNavigateToDevices}>Open Devices</button>}
-            </div>}
-          </div>
-        </section>
+        <InfrastructureMonitoring fleet={fleet} sites={snapshot?.sites} paused={paused} refresh={fleetRefresh} onNavigate={onNavigateToDevices} />
 
         <div className="dash-side-stack">
           <section className="dash-panel" aria-labelledby="incident-title">
