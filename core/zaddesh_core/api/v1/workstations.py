@@ -175,6 +175,8 @@ def accept_inventory(device_id: int, payload: InventoryResult, collector: Collec
         raise HTTPException(409, "Inventory lease changed")
     row.message = redact(payload.error) if payload.error else None
     if not payload.error:
+        from zaddesh_core.hardware_identity import apply_identity, snmp_identity
+        apply_identity(device, snmp_identity(payload.values))
         previous = row.data or {}
         row.data = parse_inventory(payload.values)
         row.data = {**row.data, **save_client_logs(db, device_id, check.id, payload.values)}

@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from math import isfinite
+from time import monotonic
 from typing import Annotated, Any, cast
 
 import httpx
@@ -25,6 +26,7 @@ from zaddesh_core.models.metrics import MetricRaw
 from zaddesh_core.models.zabbix import ZabbixConnection, ZabbixHiddenHost, ZabbixHostImport
 from zaddesh_core.security import allows_secret_transport, decrypt_secret, encrypt_secret
 from zaddesh_core.zabbix import ZabbixAPI, normalize_url
+from zaddesh_core.hardware_identity import identity, clean
 from zaddesh_core.zabbix_import import canonical_ip, duration, interface_target, prepare_checks, resolve_interface_credentials, target_name
 
 admin = require_role(["admin"])
@@ -32,6 +34,7 @@ router = APIRouter(prefix="/zabbix", tags=["Zabbix"], dependencies=[Depends(admi
 fleet_router = APIRouter(prefix="/zabbix", tags=["Zabbix"], dependencies=[Depends(get_current_user)])
 HostID = Annotated[str, StringConstraints(pattern=r"^\d{1,20}$")]
 HOST_FIELDS = {"output": ["hostid", "host", "name", "status"],
+               "selectInventory": ["vendor", "model", "hardware"],
                "selectInterfaces": ["interfaceid", "ip", "dns", "useip", "main", "available"]}
 PROBLEM_FIELDS = ["eventid", "name", "severity", "clock", "acknowledged"]
 
@@ -195,9 +198,58 @@ def local_matches(db: Session, url: str, rows: list[dict[str, Any]]) -> dict[str
     return result
 
 
+_identity_cache: dict[str, tuple[float, dict[str, dict[str, str]]]] = {}
+
+
+def hardware_items(api, rows):
+    key = sha256((str(api.url) + api.token + str(sorted(str(row.get("hostid")) for row in rows))).encode()).hexdigest()
+    previous = _identity_cache.get(key)
+    if previous and monotonic() - previous[0] < 30:
+        return previous[1]
+    try:
+        items = api.rows("item.get", {"hostids": [str(row["hostid"]) for row in rows],
+            "output": ["hostid", "key_", "name", "lastvalue"],
+            "search": {"key_": ["system.hw", "system.descr", "system.objectid", "sysDescr", "sysObjectID", "entPhysical"]},
+            "searchByAny": True, "limit": 1000}) if rows else []
+    except HTTPException:
+        return {}  # Inventory remains usable when item-read permission is absent.
+    result = {}
+    for item in items:
+        fields = result.setdefault(str(item.get("hostid")), {})
+        name, value = str(item.get("key_", "")).lower(), clean(item.get("lastvalue"))
+        if not value:
+            continue
+        if "model" in name:
+            fields.setdefault("model", value)
+        elif "vendor" in name or "manufacturer" in name or name.startswith("system.hw.chassis"):
+            # system.hw.chassis can contain a complete chassis description, not a vendor.
+            if "vendor" in name or "manufacturer" in name:
+                fields.setdefault("vendor", value)
+        elif "descr" in name:
+            fields.setdefault("description", value)
+        elif "objectid" in name:
+            fields.setdefault("object_id", value)
+    if len(_identity_cache) > 8:
+        _identity_cache.clear()
+    _identity_cache[key] = (monotonic(), result)
+    return result
+
+
 def inventory_hosts(db: Session, api: ZabbixAPI, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     matches = local_matches(db, str(api.url), rows)
-    return [{**visible_host(row, api.token), "local_device_ids": matches[str(row.get("hostid"))]} for row in rows]
+    readings = hardware_items(api, rows)
+    result = []
+    for row in rows:
+        inventory = row.get("inventory") or {}
+        if not isinstance(inventory, dict):
+            inventory = {}
+        reported = readings.get(str(row.get("hostid")), {})
+        found = identity(vendor=clean(inventory.get("vendor")) or reported.get("vendor", ""),
+                         model=clean(inventory.get("model")) or clean(inventory.get("hardware")) or reported.get("model", ""),
+                         description=reported.get("description", ""), object_id=reported.get("object_id", ""))
+        result.append({**visible_host(row, api.token), **{key: visible(value, api.token) if value else None for key, value in found.items()}, "identity_source": "Zabbix inventory / SNMP identity",
+                       "local_device_ids": matches[str(row.get("hostid"))]})
+    return result
 
 
 def read_agent_hosts(api: ZabbixAPI, params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -317,6 +369,8 @@ def import_host(host_id: HostID, user: User = Depends(admin), db: Session = Depe
             "sortfield": "itemid",
         })
         checks, snmp, skipped = prepare_checks(interfaces, items, target)
+        enriched = inventory_hosts(db, api, rows)[0]
+        hardware = {field: enriched[field] for field in ("vendor", "model")}
         name = (visible(host.get("name"), api.token) or visible(host.get("host"), api.token) or f"Zabbix host {host_id}")[:128]
         checks = [(visible(check_name, api.token)[:128] or spec.check_type.upper(), spec) for check_name, spec in checks]
     locked = cast(CursorResult, db.execute(update(ZabbixConnection).where(
@@ -329,7 +383,7 @@ def import_host(host_id: HostID, user: User = Depends(admin), db: Session = Depe
     if existing:
         db.commit()
         return {"status": "already_added", "device_id": existing[0], "checks_created": 0, "skipped": {}}
-    device = Device(name=name, ip=target, hostname=hostname, is_monitored=str(host.get("status")) == "0", is_priority=False, status="unknown")
+    device = Device(name=name, ip=target, hostname=hostname, is_monitored=str(host.get("status")) == "0", is_priority=False, status="unknown", **hardware)
     db.add(device)
     db.flush()
     db.add(ZabbixHostImport(source_key=source_key(url), host_id=host_id, device_id=device.id))

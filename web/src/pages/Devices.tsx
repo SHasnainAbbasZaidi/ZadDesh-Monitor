@@ -468,7 +468,10 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '', discoveredOn
                     </div>
                   </td>
                   <td className="px-5 py-3.5 font-mono text-xs ops-muted">{addresses.join(', ') || '—'}</td>
-                  <td className="px-5 py-3.5 text-xs ops-muted">—</td>
+                  <td className="min-w-[168px] whitespace-nowrap px-5 py-3.5 text-xs ops-muted" title={host.identity_source || 'Reported hardware identity'}>
+                    <div>{host.vendor || (local?.vendor !== 'Generic' ? local?.vendor : '') || 'Vendor not reported'}</div>
+                    <div>{host.model || local?.model || 'Model not reported'}</div>
+                  </td>
                   <td className="px-5 py-3.5">{renderUptime(label, health.status === 'down', local?.id, host.hostid)}</td>
                   <td className="px-5 py-3.5 text-xs ops-muted">—</td>
                   {isAdmin && <td className="px-3 py-3.5">{priorityCheckbox(local, label)}</td>}
@@ -501,8 +504,8 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '', discoveredOn
                     {dev.hostname && <div className="text-[10px] text-slate-400">{dev.hostname}</div>}
                   </td>
                   <td className="px-5 py-3.5 text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                    <span>{dev.vendor || 'Generic'}</span>
-                    {dev.model && <span className="ml-1 text-slate-400">({dev.model})</span>}
+                    <span>{dev.vendor && dev.vendor !== 'Generic' ? dev.vendor : 'Vendor not reported'}</span>
+                    <span className="ml-1 text-slate-400">({dev.model || 'Model not reported'})</span>
                   </td>
                   <td className="px-5 py-3.5">{renderUptime(dev.name, dev.status === 'down', dev.id)}</td>
                   <td className="px-5 py-3.5 text-xs text-slate-400 whitespace-nowrap">

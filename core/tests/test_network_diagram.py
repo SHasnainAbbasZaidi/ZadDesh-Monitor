@@ -193,11 +193,13 @@ def test_findings_builds_its_own_map_with_v2c_and_v3(client, db_session, admin_h
     auto_url = f"{root}/{automatic['id']}"
     source = db_session.query(Device).filter_by(ip="192.0.2.41").one()
     merge_observation(db_session, automatic["id"], source, {
+        "1.3.6.1.2.1.1.2.0": "1.3.6.1.4.1.9.12.3.1.3.1163",
         "1.3.6.1.2.1.1.5.0": "Managed switch", "1.3.6.1.2.1.2.2.1.2.1": "Gi0/1",
         "1.3.6.1.2.1.2.2.1.8.1": "1", "1.0.8802.1.1.2.1.3.7.1.3.1": "Gi0/1",
         "1.0.8802.1.1.2.1.4.1.1.7.0.1.1": "Gi0/2", "1.0.8802.1.1.2.1.4.1.1.9.0.1.1": "Legacy switch",
     })
     db_session.commit()
+    assert (source.vendor, source.model) == ("Cisco", "N3K-C3064PQ-10GX")
     saved_link = client.get(auto_url, headers=admin_headers).json()["links"][0]
     assert client.put(f"{auto_url}/links/{saved_link['id']}", headers=admin_headers,
                       json={**saved_link, "configured_vlans": [20]}).status_code == 204

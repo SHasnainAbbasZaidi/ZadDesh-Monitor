@@ -79,7 +79,7 @@ def test_read_only_connection_inventory_problems_and_validation(client, db_sessi
         assert request.headers.get("authorization") == (None if method == "apiinfo.version" else "Bearer " + token)
         if method == "item.get" and "key_" in data["params"].get("filter", {}):
             assert data["params"]["filter"]["key_"] == ["icmpping"]
-        if method == "item.get" and data["params"].get("hostids") == ["9"]:
+        if method == "item.get" and data["params"].get("hostids") == ["9"] and "search" not in data["params"]:
             assert "limit" not in data["params"]
         result = remote[method]
         if method == "host.get" and "hostids" in data["params"]:
@@ -135,6 +135,7 @@ def test_read_only_connection_inventory_problems_and_validation(client, db_sessi
     assert client.get(target, headers=admin_headers).status_code == 422
     imported_host = {
         "hostid": "9", "name": "Imported switch", "host": "imported-switch", "status": "0",
+        "inventory": {"vendor": "Cisco", "model": "N3K-C3064PQ-10GX"},
         "macros": [{"macro": "{$SNMP_USER}", "type": "0", "value": "zabbix-lab"}],
         "interfaces": [
             {"interfaceid": "19", "type": "2", "main": "1", "useip": "1", "ip": "192.0.2.30",
@@ -163,6 +164,7 @@ def test_read_only_connection_inventory_problems_and_validation(client, db_sessi
     device_id = result["device_id"]
     imported = client.get(f"/api/v1/devices/{device_id}", headers=admin_headers).json()
     assert (imported["name"], imported["ip"], imported["hostname"]) == ("Imported switch", "192.0.2.30", "switch.example.test")
+    assert (imported["vendor"], imported["model"]) == ("Cisco", "N3K-C3064PQ-10GX")
     imported_checks = client.get(f"/api/v1/checks?device_id={device_id}", headers=admin_headers).json()
     checks_by_type = {item["check_type"]: item for item in imported_checks}
     snmp_check = checks_by_type["snmp"]
@@ -294,6 +296,9 @@ def test_agent_availability_and_incident_feed(client, db_session, admin_headers,
                      "interfaces": [{"available": "0", "ip": f"192.0.2.{20 + i}", "useip": "1", "main": "1"}]}
                     for i, active in enumerate(("1", "0", "0"), 1)]
         elif method == "item.get":
+            if "search" in params:
+                rows = [{"hostid": "1", "key_": "system.objectid[sysObjectID.0]", "lastvalue": ".1.3.6.1.4.1.9.12.3.1.3.1163"}]
+                return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": rows})
             assert params["hostids"] == ["2", "3"]
             rows = [{"hostid": "2", "lastclock": str(clock), "delay": "1m"},
                     {"hostid": "3", "lastclock": str(clock - 3600), "delay": "1m"}]
@@ -311,6 +316,7 @@ def test_agent_availability_and_incident_feed(client, db_session, admin_headers,
     monkeypatch.setattr(routes, "connect", connect)
     rows = client.get("/api/v1/zabbix/inventory", headers=admin_headers).json()["hosts"]
     assert rows[0]["active_available"] == "1"
+    assert (rows[0]["vendor"], rows[0]["model"]) == ("Cisco", "N3K-C3064PQ-10GX")
     assert rows[1]["agent_reporting_at"]
     assert rows[2]["agent_reporting_at"] is None
     fleet = client.get("/api/v1/zabbix/fleet", headers=viewer_headers).json()

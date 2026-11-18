@@ -240,6 +240,9 @@ async fn collect(task: &CheckTask) -> Result<Vec<Reading>, ProbeError> {
 
 const TOPOLOGY_ROOTS: &[&str] = &[
     "1.3.6.1.2.1.1",                // system
+    "1.3.6.1.2.1.47.1.1.1.1.5",     // ENTITY-MIB physical class
+    "1.3.6.1.2.1.47.1.1.1.1.12",    // Chassis manufacturer
+    "1.3.6.1.2.1.47.1.1.1.1.13",    // Chassis model
     "1.3.6.1.2.1.2.2.1.2",          // ifDescr
     "1.3.6.1.2.1.2.2.1.5",          // ifSpeed
     "1.3.6.1.2.1.2.2.1.8",          // ifOperStatus
@@ -314,6 +317,9 @@ pub async fn discover_workstation(
 ) -> Result<BTreeMap<String, String>, &'static str> {
     const ROOTS: &[&str] = &[
         "1.3.6.1.2.1.1",
+        "1.3.6.1.2.1.47.1.1.1.1.5", // ENTITY-MIB physical class
+        "1.3.6.1.2.1.47.1.1.1.1.12", // Chassis manufacturer
+        "1.3.6.1.2.1.47.1.1.1.1.13", // Chassis model
         "1.3.6.1.2.1.25.4.2.1.2", // Running software names
         "1.3.6.1.2.1.25.4.2.1.4", // Executable paths, excluding command arguments
         "1.3.6.1.2.1.25.4.2.1.6", // Software type

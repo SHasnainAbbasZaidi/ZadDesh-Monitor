@@ -9,7 +9,7 @@ const endpoint = '/zabbix';
 type Connection = { configured: boolean; api_url: string | null; version: string | null };
 type Host = { hostid: string; name: string; host: string; status: string; health_status: Device['status']; health_label: string;
   interfaces: { ip: string; dns: string; useip: string; available?: string }[] };
-export type ZabbixInventoryHost = Host & { local_device_ids: number[] };
+export type ZabbixInventoryHost = Host & { local_device_ids: number[]; vendor?: string | null; model?: string | null; identity_source?: string };
 type Inventory = { hosts: ZabbixInventoryHost[]; limited: boolean };
 type Problem = { eventid: string; name: string; severity: string; clock: string; acknowledged: string };
 type Reading = { up: boolean; timestamp: string };

@@ -263,6 +263,8 @@ def merge_observation(db: Session, diagram_id: int, device: Device, data: dict[s
         by_id[result.id] = result
         return result
 
+    from zaddesh_core.hardware_identity import apply_identity, snmp_identity
+    apply_identity(device, snmp_identity(data))
     source = node(device.name, device)
     sys_name = data.get("1.3.6.1.2.1.1.5.0", device.name)
     sys_descr = data.get("1.3.6.1.2.1.1.1.0", "")
