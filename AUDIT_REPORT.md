@@ -437,3 +437,26 @@ Live diagnosis: the original one-hour API response returned HTTP 200 in 2.7 seco
 After collection, the API returned 24 channels and 71 successful samples. Chrome confirmed the canvas renders, stays visible, and completes another successful refresh during live updates. Both theme screenshots were inspected: `.audit/ui-polish/glass-latency-dark.png` and `glass-latency-light.png`. Some real targets still fail ICMP and remain visibly marked; enabling a graph does not make an unreachable network target reachable.
 
 Validation: TypeScript, ESLint, production build and ten Vitest tests passed. A new Playwright regression injects a 3.5-second telemetry response and live change events every 2.1 seconds; the chart still finishes loading (1 passed). The artificial latency series is confined to that browser test. The deployed graph uses real collected data.
+
+## 2026-11-18: SNMP hardware vendor and model
+
+Bug HW-001 (Medium, fixed in `6f13005`): Zabbix device rows rendered a literal dash in Vendor & Model. The integration also omitted host hardware inventory and system identity items; local SNMP topology observations never populated Device.vendor/model. The Devices table now displays reported hardware, falls back to the matched local record, and explicitly labels missing identities. The column has enough width for readable model names.
+
+Added a shared hardware resolver using ENTITY-MIB chassis manufacturer/model, sysDescr, sysObjectID enterprise identity, and verified Cisco product identifiers. The collector now walks physical class/manufacturer/model objects for topology and workstation snapshots. Successful snapshots fill missing local hardware fields while preserving existing manual values. Zabbix imports persist resolved hardware; inventory uses one bounded, cached item lookup for all returned hosts rather than per-device requests. Operating-system and generic SNMP-agent names are not presented as hardware manufacturers.
+
+Product mapping sources: [Cisco product OIDs](https://github.com/cisco/cisco-mibs/blob/main/v2/CISCO-PRODUCTS-MIB.my) and [Cisco physical entity OIDs](https://github.com/cisco/cisco-mibs/blob/main/v2/CISCO-ENTITY-VENDORTYPE-OID-MIB.my). The Catalyst 37xx stack identity describes the stack family, not an invented member SKU.
+
+Live evidence: authenticated `GET /api/v1/zabbix/inventory` returned HTTP 200 with 25 hosts, 12 reporting vendors and 12 resolved model/family identities, including two N3K-C3064PQ-10GX core switches. Twelve matched local records received missing identity data in MongoDB. Thirteen hosts still have no usable hardware identity in current upstream readings; the UI states "Vendor not reported" / "Model not reported". These require a responding SNMP hardware inventory or populated upstream hardware items; their manufacturer cannot truthfully be inferred from Windows/Linux descriptions alone. No demo identities were inserted.
+
+The initial backfill encountered MongoDB WriteConflict twice while collection was active, including with short per-device transactions. It completed successfully while the owned stack was stopped for deployment. The collector spool was preserved, and both the API readiness endpoint and UI URL returned 200 after restart. This does not establish that general database write contention is resolved.
+
+Validation commands/results:
+
+- `pytest core/tests/test_hardware_identity.py core/tests/test_zabbix.py core/tests/test_network_diagram.py -q`: 20 passed. Covers exact product OIDs, chassis versus module selection, ambiguous/absent data, OS-versus-hardware identity, import persistence, and topology persistence.
+- Ruff on changed Python modules/tests and mypy on the core: passed.
+- Collector `cargo clippy --locked -- -D warnings`, `cargo fmt -- --check`, `cargo test --locked` (4 passed), `cargo build --release --locked`: passed.
+- Frontend TypeScript, ESLint, Vitest (10 passed), production build: passed.
+- `playwright test e2e/hardware-identity.spec.ts`: 1 passed with browser-only API fixtures. Its first run failed because unrelated endpoints returned invalid fixture shapes; corrected those responses and reran successfully.
+- Separate Chrome smoke check against live data confirmed two exact Nexus model cells and 13 explicit missing-model labels. Screenshot inspected: `.audit/ui-polish/hardware-identity-devices.png`. Live response summary: `.audit/local-run/hardware-http-result.json`.
+
+Changed files in `6f13005`: collector SNMP probes; core hardware_identity resolver, Zabbix/workstation API handlers and topology persistence; hardware/Zabbix/topology tests; UI Zabbix types and Devices table; browser hardware identity regression. Linux execution and the broader previously blocked migration/native suite were not verified by this targeted change. Both deployed local UI paths contain the updated build.
