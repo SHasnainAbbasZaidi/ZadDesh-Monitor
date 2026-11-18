@@ -274,3 +274,56 @@ The Probe latency panel defaults to **All Devices** and can switch to one device
 The running `/api/v1/system/info` reported `database_type: sqlite`. MongoDB continues to serve infrastructure logs. The staging command copied all 32 SQLite tables into `zaddesh_migration_primary_snapshot`, including 41,106 raw metrics, and verified each collection's row count and content hash. The snapshot preserves numeric IDs, encrypted credentials, and timestamp microseconds.
 
 Production cutover remains pending. Authentication, inventory, collectors, metric ingestion and incident handling still use SQLAlchemy, including atomic writes across related tables. A MongoDB runtime needs equivalent operations, indexes, and transaction handling before serving this staged data. The staged copy is point-in-time and will need refreshing at cutover.
+
+## 2026-11-18 rollout: SNMP workstations and native MongoDB
+
+**Current status supersedes the historical migration-staging section above.** The running core now uses MongoDB for accounts, inventory, configuration, metrics, incidents, topology and logs. MongoDB mode creates no SQL engine/cache; SQLAlchemy metadata and expression builders remain. Legacy SQL is retained for migration, isolated tests and rollback.
+
+### Delivered
+
+- Discovered Devices lists registered devices with enabled SNMP checks (13 in the live installation); it is not a subnet scanner. New entries here default to SNMP-only, on-demand collection and non-priority alerts.
+- Device details request processes, services, CPU and storage through SNMP. Windows/Linux command downloads and existing-client updates include service and issue-log extensions. Missing tables, denied access and collector timeouts have explicit states.
+- Priority controls scope Overview, global events, incidents and notifications. Existing infrastructure retains priority. On-demand devices alert on snapshots; choose scheduled collection for continuous checks.
+- Infrastructure Logs separates ZadDesh logs and integrated application logs, including inside device details. Zabbix events archive automatically regardless of priority. Other providers can forward tagged records through authenticated ingestion; automatic pull adapters for every integration are not implemented.
+- Native log TTL defaults to 30 days. The client extension retrieves the latest 30 warnings/errors on demand, preserves timestamps and deduplicates repeats. Older client events can rotate away before retrieval.
+
+### Migration and live evidence
+
+Authenticated MongoDB 8.0.38 runs as a single-member replica set on loopback port 27118, in private persistent Windows application storage. Application credentials are scoped to core/log namespaces. Protected settings and backups are excluded from Git.
+
+All 54 collections passed document read-back and row-count verification. The initial snapshot contained 13,792,959 metrics; final catch-up preserved **13,856,230 metrics**, 24 devices, 5,570 checks and the admin account. Password hashes and saved node positions were compared successfully. Original SQL files remained unchanged. Initial optimized migration took 1,426.23 seconds; final cutover took 468.38 seconds, including a 208.5-second backup. Polling was interrupted during cutover; this is not a claim of uninterrupted sampling.
+
+Live `/readyz` and `/api/v1/system/info` return 200; system info reports `database_type: mongodb`. Real Zabbix inventory returns 25 hosts. Both log sections contain records and the Zabbix log collector reports ready. Authenticated WebSockets connected through ports 8000 and 18875. The published browser rendered all 13 SNMP devices without API 5xx responses during that walkthrough.
+
+### Bugs fixed
+
+| ID | Severity | Failure and fix | Evidence |
+|---|---|---|---|
+| MONGO-01 | High | Fingerprint equality selected a collection scan despite the partial unique index, causing full-history ingestion timeouts. Added an explicit string-type predicate. | Real-driver command capture and explain test selects `idx_fingerprint`; duplicate replay is idempotent. |
+| MONGO-02 | High | Native storage needed model refresh, write locks and version checks for account/state concurrency. Implemented transactional guards and refreshed hydration. | Concurrent lock, refresh and parallel HTTP ingestion tests. |
+| MONGO-03 | Medium | Per-record guards/updates caused excessive round trips. Batched them by collection and deduplicated device-status query results. | 25 locked/updated records require two update commands; real collector queue drained from over 200 batches to one. |
+| MONGO-04 | Medium | Concurrent transaction conflicts appeared as database outages. Return retryable HTTP 409. | Parallel ingestion returns 202/409 and stores one record. |
+| CHART-01 | Medium | MongoDB ranking rejected multiple window sort fields. Added a composite numeric sort key. | Real MongoDB latency/window/failure-exclusion test and live latency HTTP 200. |
+| UI-01 | Medium | Priority checkbox reverted before async save completed. Added optimistic state and failure rollback. | Browser click, saved response and persisted priority assertions. |
+| UI-02 | Medium | Issue logs lagged snapshot completion. Refresh logs immediately on completion; display observation times as UTC converted to local time. | Browser sees the issue log within five seconds. |
+| TEST-01 | Medium | Background jobs accessed shared SQLite fixtures and caused a Windows access violation. Isolated unit-test workers; dedicated lifecycle tests still enable real loops. | Full legacy regression suite passes. |
+
+### Tests and remaining limits
+
+Core legacy tests: **86 passed**; native-only tests run separately. Real MongoDB suite: **14 passed**, covering migration/catch-up, indexing, transactions, batching, priority, inventory, issue-log deduplication and unavailable collectors. TypeScript, ESLint, production build and **10 Vitest tests** passed. Windows GNU Rust checks passed: clippy with warnings denied, four tests and release build.
+
+An isolated MongoDB browser run passed **7 Playwright tests**, including chart/alert/acknowledgement/recovery at 390/768/1440 pixels, downloads, log sections, user permissions and workstation details. No serious/critical axe violations occurred in the tested workstation flow. Its process/service data is explicitly named validation-fixture data in a separate database, not production seed data.
+
+All four generated installers/update scripts passed PowerShell/Bash syntax checks. The real Windows event reader returned 43 encoded chunks with read access and no stderr using the installer's process-scoped execution-policy argument. The first test omitted that argument and was blocked by the machine's script policy; no permanent policy change was made.
+
+**Real remote SNMP workstation collection remains unverified:** the selected existing SNMPv3 target timed out. The failure was shown explicitly; it was not marked passed. Client agent installation and SNMP access remain prerequisites. Both installed Linux lab distributions failed to start through WSL. Linux deployment and the Windows 7 through Server 2025 compatibility matrix remain unverified.
+
+Observed full-history API times included critical incidents 9.76 seconds and latency 2.06 seconds. These are individual observations, not p95 load results. Ingestion initially failed; the fixed index and batched updates restored accepted batches and disk-queue replay. No new 5,000-device qualification or 30-minute browser soak is claimed. Linux/Windows CI remains configured and a native MongoDB job was added; remote CI was not run.
+
+The rollout is usable but **not production-qualified**. Remaining priorities: real client rollout, compatibility testing, faster incident queries, broader load/soak coverage, and the earlier unimplemented features documented in this report.
+
+### Evidence and changed files
+
+Local live screenshots: `.audit/ui-polish/live-overview-mongo.png`, `live-discovered-mongo.png`, `live-snmp-snapshot.png`, `live-integrated-logs.png`. Fixture screenshots: `workstation-light.png` and `workstation-dark.png` in the same directory. Sanitized test/API reports are in `.audit/local-run/`; protected migration reports/settings are in `.audit/mongodb-native/`. The local restart helper is `.audit/local-run/start-current-stack.py`.
+
+Changes cover core native persistence/query compilation, models/migrations, priority filtering, workstation APIs, integrated logging, collector SNMP jobs, client scripts, Devices/Logs/Overview UI, regression tests, launchers, migration tooling, CI and README. Git commits below record the complete changed-file lists.

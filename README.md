@@ -1,10 +1,10 @@
 # ZadDesh
 
-ZadDesh is an early-stage self-hosted infrastructure monitor. It has a FastAPI core, a React UI, a Rust collector for ICMP, HTTP(S), TCP, and SNMP polling, and a constrained Ruby rule evaluator. The default database is SQLite in WAL mode. See [AUDIT_REPORT.md](AUDIT_REPORT.md) for the verification results and known gaps. SNMP traps, generic UDP, notification delivery, scheduled rule execution, and rollup jobs are unavailable.
+ZadDesh is an early-stage self-hosted infrastructure monitor. It has a FastAPI core, a React UI, a Rust collector for ICMP, HTTP(S), TCP, and SNMP polling, and a constrained Ruby rule evaluator. The default database is MongoDB; the core uses native MongoDB queries and transactions. See [AUDIT_REPORT.md](AUDIT_REPORT.md) for the verification results and known gaps. SNMP traps, generic UDP, notification delivery, scheduled rule execution, and rollup jobs are unavailable.
 
 ## Local quick start
 
-Install Python 3.11 or newer and Node.js 24 with npm. Run the following from the repository root. Use a fresh SQLite database for a first run. The launchers install the core if needed, apply Alembic migrations, and bind to loopback. Build the UI explicitly when upgrading an existing checkout.
+Install Python 3.11 or newer, Node.js 24 with npm, and an authenticated MongoDB 8 replica set. Set `ZADDESH_DATABASE__URL` to the application connection URI, with the `zaddesh` database and replica-set name. Grant its account read/write access to `zaddesh` and `zaddesh_logs`. Run the following from the repository root. The launchers install the core if needed, initialize MongoDB collections and indexes, and bind to loopback. Build the UI explicitly when upgrading an existing checkout. Replica sets provide the transactions used for consistent ingestion and alert updates. A single-member replica set supports a local installation.
 
 **Windows (PowerShell)**
 
@@ -24,7 +24,7 @@ bash scripts/dev.sh
 
 On Debian/Ubuntu, install `python3-venv` for a new environment. Set `PYTHON` to choose a different Python executable. Set `ZADDESH_PORT` to choose another port.
 
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000), create the first administrator, then sign in. `/healthz` checks the process and `/readyz` checks the migrated metrics schema. The new default database is `core/zaddesh-live.db`; the launcher does not touch the old packaged `zaddesh.db` files. Do not expose a legacy database with published demo accounts, old collector tokens, or the old signing/encryption keys. Keep a backup and assess any needed data migration offline.
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000), create the first administrator, then sign in. `/healthz` checks the process and `/readyz` checks storage connectivity. MongoDB stores accounts, configuration, devices, checks, metrics, alerts, topology, notifications and logs. Core timestamps preserve microsecond precision as UTC integer microseconds, with normal datetime values returned by the API. Keep the signing and encryption keys persistent across restarts and migrations.
 
 ## Collect real samples
 
@@ -87,9 +87,9 @@ Sign in as an **Admin** and open **Settings â†’ Users and access** to create acc
 
 ### Centralized infrastructure logs
 
-Start an authenticated MongoDB deployment. Set `ZADDESH_LOGS__MONGO_URI` to the connection string of a dedicated application account with read/write permissions on `zaddesh_logs`. Set a random secret of at least 32 characters in `ZADDESH_LOGS__INGEST_TOKEN` before launching ZadDesh. Use `ZADDESH_LOGS__DATABASE` to choose another database and `ZADDESH_LOGS__RETENTION_DAYS` to change the default of 30 days for new entries. MongoDB stores logs. The existing infrastructure and metrics databases retain their current roles.
+Infrastructure Logs has separate **ZadDesh logs** and **Integrated app logs** sections. ZadDesh events and imported logs use MongoDB. Connected Zabbix events are archived automatically regardless of device alert priority. Other applications and log shippers can forward records to the ingestion API with a provider label and device ID. The shared application MongoDB URI is used by default. `ZADDESH_LOGS__MONGO_URI` can select a dedicated MongoDB log deployment. Set a random secret of at least 32 characters in `ZADDESH_LOGS__INGEST_TOKEN` before accepting forwarded logs. `ZADDESH_LOGS__DATABASE` selects the log namespace and `ZADDESH_LOGS__RETENTION_DAYS` controls the default 30-day retention.
 
-Signed-in users can filter received entries by source and severity in **Infrastructure Logs**. Log shippers can POST to `/api/v1/logs/ingest` using the dedicated bearer token over HTTPS or direct loopback. The request body has an `entries` array with up to 100 objects. Each object accepts `source`, `message`, `severity`, an optional timezone-aware `timestamp`, and an optional UUID `event_id`. Reuse the same UUID when retrying a batch.
+Signed-in users can filter entries by source, application and severity. Log shippers POST to `/api/v1/logs/ingest` using the dedicated bearer token over HTTPS or direct loopback. The request body has an `entries` array with up to 100 objects. Each object accepts `source`, `message`, `severity`, optional `provider` and `device_id`, an optional timezone-aware `timestamp`, and an optional UUID `event_id`. Provider IDs include `zabbix`, `grafana`, `prometheus`, `solarwinds`, `graylog`, `loggly`, `logzio` and `opentelemetry`. Associate workstation logs with its numeric `device_id` to show them in device details. Reuse the same UUID when retrying a batch.
 
 To receive UDP syslog from appliances, run the forwarder from the Python environment used by the core. Set the same ingest token in its environment and substitute the receiver's LAN address and your trusted source subnet.
 
@@ -99,13 +99,23 @@ python scripts/syslog_forwarder.py --bind 192.0.2.20 --port 5514 --allow 192.0.2
 
 Configure devices to send UDP syslog to the receiver address and port. Run the forwarder on a trusted network segment. UDP syslog offers no sender authentication or delivery guarantee, and the forwarder buffers pending batches in memory.
 
-The primary database remains SQLite by default. To prepare a MongoDB migration snapshot, set `ZADDESH_MIGRATION_MONGO_URI` to an authenticated connection string with access to a new staging database, then run:
+To migrate an existing installation, stop the old core and collector, preserve its signing and encryption keys, and set `ZADDESH_DATABASE__URL` to the old SQLite URL temporarily. Upgrade the offline source with `python -m alembic upgrade head` from `core`. Set `ZADDESH_MIGRATION_MONGO_URI` to an application URI for an empty MongoDB target, then run from the repository root:
 
 ```bash
-python scripts/stage_mongo_migration.py --sqlite core/zaddesh-live.db --database zaddesh_migration_snapshot
+python scripts/migrate_to_mongodb.py --source core/zaddesh-live.db --report migration-report.json
 ```
 
-The script makes a consistent SQLite backup, copies every table to a separate MongoDB collection, and verifies row counts and content hashes before marking the snapshot complete. It keeps source IDs and timestamp precision. The snapshot contains sensitive operational data including credential ciphertext and password hashes, so restrict staging database access. ZadDesh's runtime still reads and writes its primary SQL database.
+For a large installation, first migrate a consistent SQLite backup while the existing app runs. Stop the old stack, upgrade its final SQL source to the same schema, then repeat the command with `--catch-up` to reconcile configuration and append immutable metrics written after the backup. This mode supports the app’s device/check deletion paths and rejects mismatched record counts. Keep both sources until validation finishes.
+
+The source is opened read-only. Every batch is read back from MongoDB and compared, then collection record counts are verified. IDs, timestamps, password hashes and credential ciphertext are preserved. After verification, set `ZADDESH_DATABASE__URL` to the target MongoDB URI, keep the original encryption and signing keys, and launch the stack. Existing infrastructure devices retain priority. Newly added devices default to non-priority.
+
+### SNMP workstations and priority
+
+**Discovered Devices** lists registered devices with enabled SNMP interfaces. Its add-device form provisions SNMP and defaults to on-demand collection. Opening device details requests a process, service and resource snapshot from the collector. The collection selector switches between on-demand SNMP and scheduled telemetry. The snapshot timestamp identifies when data was observed.
+
+Select **Priority alerts** in either device inventory or device details to include that device in Overview, Alerts & Events and incident notifications. Non-priority device telemetry and logs remain available in device details. Logs from both origins are retained centrally.
+
+Process snapshots use HOST-RESOURCES-MIB. Service snapshots use the `zaddesh_services` Net-SNMP extension installed by the current Windows and Linux command scripts. Existing clients can download the services and issue-log update scripts from device details. The read-only `zaddesh_events` extension retrieves the latest 30 Windows System/Application warnings and errors, or Linux system-journal issues, when a snapshot is requested. Records keep their original timestamps and are deduplicated across snapshots. Linux requires Python 3 and system-journal read access; Windows uses the Event Log Readers group. Missing permissions and collection limits are shown in details. This is on-demand retrieval, so older events can rotate out of the client before retrieval. Agents that do not expose a table show an unavailable state. Inventory collection uses GETNEXT for SNMPv1 and GETBULK for v2c/v3, with bounded table sizes and a 55-second collection deadline.
 
 Supported operations are GET, GETNEXT, GETBULK (v2c/v3) and a bounded 64-object WALK. Numeric samples appear under `snmp.<numeric OID>` and in the device telemetry view. Counter rates, traps and MIB name lookup are separate, unavailable features.
 
@@ -132,7 +142,7 @@ The core accepts these optional environment variables for this section.
 
 ## Isolated demo
 
-Set `ZADDESH_DEMO_MODE=true`, `ZADDESH_DATABASE__URL=sqlite:///./zaddesh-demo.db`, and a unique `ZADDESH_DEMO_PASSWORD` of at least 16 characters. Run `scripts\dev.ps1 -Seed` on Windows or `bash scripts/dev.sh seed` on Linux, then start the core with the same demo mode and database settings. Sign in as `admin` with the password you set. The dashboard labels the sample data and collection is disabled. To return to live monitoring, unset the demo settings and launch the core again. Seeding does not overwrite a populated database.
+Set `ZADDESH_DEMO_MODE=true`, `ZADDESH_DATABASE__URL` to a separate MongoDB database named `zaddesh_demo`, and a unique `ZADDESH_DEMO_PASSWORD` of at least 16 characters. Run `scripts\dev.ps1 -Seed` on Windows or `bash scripts/dev.sh seed` on Linux, then start the core with the same demo mode and database settings. Sign in as `admin` with the password you set. The dashboard labels the sample data and collection is disabled. To return to live monitoring, unset the demo settings and launch the core again. Seeding does not overwrite a populated database.
 
 ## Verification
 
