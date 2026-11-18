@@ -71,6 +71,7 @@ class Event(Base):
     device_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("devices.id", ondelete="CASCADE"), nullable=True, index=True)
     check_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("checks.id", ondelete="CASCADE"), nullable=True, index=True)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)  # state_change, alert_trigger, alert_resolve, trap
+    client_event_key: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, nullable=True)
     severity: Mapped[str] = mapped_column(String(32), default="info", nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)

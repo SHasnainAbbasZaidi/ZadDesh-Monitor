@@ -10,11 +10,13 @@ import httpx
 from sqlalchemy import update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import SQLAlchemyError
+from pymongo.errors import PyMongoError
 
 from zaddesh_core.config import settings
 from zaddesh_core.database import SessionLocal
 from zaddesh_core.incidents import utc_now
 from zaddesh_core.models.incidents import IncidentDelivery
+from zaddesh_core.models import Alert, Device
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,12 @@ def deliver_once() -> None:
         item = db.query(IncidentDelivery).filter(IncidentDelivery.status.in_(("queued", "sending")),
                                                 IncidentDelivery.next_attempt <= now).order_by(IncidentDelivery.id).first()
         if item is None:
+            return
+        alert = db.get(Alert, item.alert_id)
+        device = db.get(Device, alert.device_id) if alert else None
+        if device is None or not device.is_priority:
+            item.status, item.outcome = "failed", "Device priority is disabled"
+            db.commit()
             return
         claimed = cast(CursorResult, db.execute(update(IncidentDelivery).where(IncidentDelivery.id == item.id,
             IncidentDelivery.status.in_(("queued", "sending")), IncidentDelivery.next_attempt <= now).values(
@@ -68,7 +76,7 @@ async def delivery_loop(stop: asyncio.Event) -> None:
     while not stop.is_set():
         try:
             await asyncio.to_thread(deliver_once)
-        except (SQLAlchemyError, ValueError):
+        except (SQLAlchemyError, PyMongoError, ValueError):
             logger.error("Incident delivery worker failed to process its queue")
         try:
             await asyncio.wait_for(stop.wait(), 2)

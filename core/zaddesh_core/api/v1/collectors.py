@@ -116,7 +116,7 @@ def get_collector_tasks(
     q = (
         db.query(Check, Device.ip, Device.name.label("device_name"))
         .join(Device, Check.device_id == Device.id)
-        .filter(Check.is_enabled.is_(True), Device.is_monitored.is_(True))
+        .filter(Check.is_enabled.is_(True), Device.is_monitored.is_(True), Device.collection_mode == "scheduled")
     )
     if collector.site_id:
         q = q.filter(Device.site_id == collector.site_id)

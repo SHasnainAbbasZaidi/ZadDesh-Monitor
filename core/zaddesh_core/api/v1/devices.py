@@ -114,12 +114,15 @@ def list_devices(
     status_filter: Optional[str] = Query(None, alias="status"),
     site_id: Optional[int] = None,
     group_id: Optional[int] = None,
+    snmp_only: bool = False,
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     q = db.query(Device)
+    if snmp_only:
+        q = q.filter(Device.id.in_(db.query(Check.device_id).filter(Check.check_type == "snmp", Check.is_enabled.is_(True))))
     if query:
         term = f"%{query.strip()}%"
         q = q.filter((Device.name.ilike(term)) | (Device.ip.ilike(term)) | (Device.hostname.ilike(term)))
@@ -130,7 +133,7 @@ def list_devices(
     if group_id:
         q = q.filter(Device.group_id == group_id)
 
-    return q.order_by(Device.name.asc()).offset(offset).limit(limit).all()
+    return q.order_by(Device.name.asc(), Device.id.asc()).offset(offset).limit(limit).all()
 
 
 @router.post("/devices", response_model=DeviceRead, status_code=status.HTTP_201_CREATED)
@@ -141,6 +144,8 @@ def create_device(
     db: Session = Depends(get_db),
 ):
     snmp = payload.initial_snmp
+    if payload.collection_mode == "on_demand" and snmp is None:
+        raise HTTPException(422, "On-demand collection requires an SNMP interface")
     dns_name = (payload.hostname or "").strip()
     if snmp and snmp.connect_to == "dns" and (not dns_name or len(dns_name) > 255):
         raise HTTPException(422, "Enter a DNS name to connect to the SNMP interface by DNS")
@@ -257,6 +262,8 @@ def get_device(
         uptime_seconds=device.uptime_seconds,
         last_seen=device.last_seen,
         is_monitored=device.is_monitored,
+        is_priority=device.is_priority,
+        collection_mode="on_demand" if device.collection_mode == "on_demand" else "scheduled",
         created_at=device.created_at,
         updated_at=device.updated_at,
         site=site_read,
@@ -279,6 +286,10 @@ def update_device(
         raise HTTPException(status_code=404, detail="Device not found")
 
     for k, v in payload.model_dump(exclude_unset=True).items():
+        if k in {"is_priority", "collection_mode"} and v is None:
+            raise HTTPException(422, "Priority and collection mode require a value")
+        if k == "collection_mode" and v == "on_demand" and db.query(Check).filter(Check.device_id == device.id, Check.check_type == "snmp", Check.is_enabled.is_(True)).first() is None:
+            raise HTTPException(422, "On-demand collection requires an enabled SNMP interface")
         setattr(device, k, v)
     device.updated_at = datetime.datetime.utcnow()
     db.commit()

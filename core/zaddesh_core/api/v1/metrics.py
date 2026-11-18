@@ -5,7 +5,7 @@ import hashlib
 import json
 import logging
 import time
-from typing import Literal
+from typing import Literal, cast as typing_cast
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import BigInteger, and_, case, cast, extract, func, or_, select
@@ -13,6 +13,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from zaddesh_core.database import get_db
+from zaddesh_core.mongo_store import MongoSession
 from zaddesh_core.models.metrics import MetricRaw
 from zaddesh_core.models.infrastructure import Collector, Device
 from zaddesh_core.models.alerts import Alert, Event
@@ -98,20 +99,23 @@ def ingest_metrics(
     if not records:
         return {"ingested": 0, "duplicates": 0, "discarded": discarded, "status": "success"}
     dialect = db.get_bind().dialect.name
-    if dialect not in {"sqlite", "postgresql"}:
-        raise HTTPException(501, "Ingestion requires SQLite or PostgreSQL")
-    conn = db.connection()
-    if dialect == "sqlite":
+    if isinstance(db, MongoSession):
+        inserted = db.insert_metrics(records)
+    elif dialect == "sqlite":
+        conn = db.connection()
         # Stay below even the legacy 999-variable SQLite limit and avoid one execution per point.
         inserted = sum(conn.execute(sqlite_insert(MetricRaw).values(records[offset:offset + 125])
                                     .on_conflict_do_nothing(index_elements=["fingerprint"])).rowcount
                        for offset in range(0, len(records), 125))
-    else:
+    elif dialect == "postgresql":
+        conn = db.connection()
         inserted = conn.execute(pg_insert(MetricRaw).on_conflict_do_nothing(
             index_elements=["fingerprint"]), records).rowcount
+    else:
+        raise HTTPException(501, "Unsupported metric storage backend")
     inserted_at = time.monotonic()
     for device_id in {record["device_id"] for record in records}:
-        devices[device_id].last_seen = now
+        devices[typing_cast(int, device_id)].last_seen = now
 
     states = db.query(CheckState).filter(CheckState.check_id.in_(observations)).order_by(
         CheckState.check_id
@@ -166,7 +170,7 @@ def ingest_metrics(
             continue
         title = f"Availability: {check.name}"
         open_alert = open_alerts.get((check.id, title))
-        if not ok and open_alert is None:
+        if not ok and open_alert is None and devices[check.device_id].is_priority:
             db.add(Alert(device_id=check.device_id, check_id=check.id, title=title,
                          message="Probe failed", severity="critical", triggered_at=timestamp))
         if ok and open_alert is not None:
@@ -181,7 +185,7 @@ def ingest_metrics(
         summary: dict[int, set[str]] = {device_id: set() for device_id in touched}
         for device_id, status_name in db.query(Check.device_id, CheckState.current_status).join(
             CheckState, CheckState.check_id == Check.id,
-        ).filter(Check.device_id.in_(touched), Check.is_enabled.is_(True)):
+        ).filter(Check.device_id.in_(touched), Check.is_enabled.is_(True)).distinct():
             summary[device_id].add(status_name)
         for device_id, statuses in summary.items():
             device = devices[device_id]
@@ -220,14 +224,17 @@ def get_probe_latency(
     protocol: Literal["icmp", "http", "tcp"] = "icmp",
     minutes: int = Query(default=60, ge=1, le=1440),
     device_id: int | None = Query(default=None, gt=0),
+    priority_only: bool = False,
     _: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ProbeLatencyResponse:
     check_types, latency_key, availability_key = PROBE_LATENCY[protocol]
     end = datetime.datetime.now(datetime.timezone.utc)
     start = end - datetime.timedelta(minutes=minutes)
-    devices = [ProbeLatencyDevice(id=row.id, name=row.name, ip=row.ip, status=row.status)
-               for row in db.query(Device.id, Device.name, Device.ip, Device.status).order_by(Device.name, Device.id)]
+    inventory = db.query(Device.id, Device.name, Device.ip, Device.status)
+    if priority_only:
+        inventory = inventory.filter(Device.is_priority.is_(True))
+    devices = [ProbeLatencyDevice(id=row.id, name=row.name, ip=row.ip, status=row.status) for row in inventory.order_by(Device.name, Device.id)]
     check_selection = (
         select(func.min(Check.id).label("check_id"))
         .join(Device, Device.id == Check.device_id)
@@ -236,6 +243,8 @@ def get_probe_latency(
     )
     if device_id is not None:
         check_selection = check_selection.where(Check.device_id == device_id)
+    if priority_only:
+        check_selection = check_selection.where(Device.is_priority.is_(True))
     chosen = check_selection.cte("selected_probes")
     checks = db.execute(
         select(Check.id, Check.device_id, Check.name, Check.interval_seconds, CheckState.current_status)
@@ -279,6 +288,8 @@ def get_probe_latency(
         )
         .join(chosen, chosen.c.check_id == MetricRaw.check_id)
         .where(
+            MetricRaw.check_id.in_(channels),
+            MetricRaw.metric_key.in_((latency_key, availability_key)),
             MetricRaw.timestamp.between(utc_naive(start), utc_naive(end)),
             or_(
                 and_(MetricRaw.metric_key == latency_key, ~failed_at_timestamp),
@@ -340,6 +351,8 @@ def get_latest_metrics(
     db: Session = Depends(get_db),
 ):
     """Get the most recent metric values for a device."""
+    if isinstance(db, MongoSession):
+        return db.latest_metrics(device_id)
     subq = (
         db.query(
             MetricRaw.metric_key,

@@ -22,7 +22,8 @@ class ServerConfig(BaseModel):
 
 
 class DatabaseConfig(BaseModel):
-    url: str = "sqlite:///./zaddesh-live.db"
+    url: str = Field(default="mongodb://127.0.0.1:27017/zaddesh?replicaSet=zaddesh", repr=False)
+    name: str = "zaddesh"
     echo: bool = False
     pool_size: int = 20
     max_overflow: int = 10

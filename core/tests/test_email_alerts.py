@@ -292,6 +292,8 @@ def test_zabbix_lifecycle_multiple_recipients_retry_and_restart(tmp_path, monkey
     with receiver(failures=1) as smtp:
         config = ServerConfig(host="127.0.0.1", port=smtp.server_address[1], encryption="none", sender="monitor@example.com", enabled=True).model_dump()
         with sessions.begin() as db:
+            from zaddesh_core.models.infrastructure import Device
+            db.add(Device(name="Core switch", ip="192.0.2.2", is_priority=True))
             db.add(EmailSettings(id=1, config=config, scan_from=now - 1))
             db.add(ZabbixConnection(id=1, api_url=source, version="7.4.1", encrypted_token="unused-by-fixture"))
             for index in (1, 2):

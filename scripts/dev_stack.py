@@ -22,7 +22,7 @@ if not (root / "web" / "dist" / "index.html").is_file():
 if not os.getenv("ZADDESH_COLLECTOR_TOKEN"):
     parser.error("Set ZADDESH_COLLECTOR_TOKEN; see collector enrollment in README.md")
 base_url = f"http://127.0.0.1:{args.port}"
-subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=root / "core", check=True)
+subprocess.run([sys.executable, "-m", "zaddesh_core.storage_init"], cwd=root / "core", check=True)
 children = []
 try:
     core = subprocess.Popen([sys.executable, "-m", "uvicorn", "zaddesh_core.main:app", "--host",

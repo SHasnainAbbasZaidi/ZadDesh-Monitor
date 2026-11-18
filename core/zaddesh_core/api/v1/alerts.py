@@ -4,10 +4,12 @@ import datetime
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 
 from zaddesh_core.database import get_db
 from zaddesh_core.models.alerts import Alert, Acknowledgement, Event
 from zaddesh_core.models.auth import User
+from zaddesh_core.models.infrastructure import Device
 from zaddesh_core.schemas.alert import AlertRead, EventRead, AlertAckRequest
 from zaddesh_core.api.deps import get_current_user, require_role
 
@@ -26,7 +28,7 @@ def list_alerts(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    q = db.query(Alert)
+    q = db.query(Alert).join(Device, Device.id == Alert.device_id).filter(Device.is_priority.is_(True))
     if status_filter:
         q = q.filter(Alert.status == status_filter.lower())
     if severity:
@@ -117,6 +119,8 @@ def list_events(
     db: Session = Depends(get_db),
 ):
     q = db.query(Event)
+    if device_id is None:
+        q = q.outerjoin(Device, Device.id == Event.device_id).filter(or_(Event.device_id.is_(None), Device.is_priority.is_(True)))
     if device_id:
         q = q.filter(Event.device_id == device_id)
     if event_type:

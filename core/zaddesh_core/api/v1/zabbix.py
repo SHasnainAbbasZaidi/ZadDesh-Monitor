@@ -329,7 +329,7 @@ def import_host(host_id: HostID, user: User = Depends(admin), db: Session = Depe
     if existing:
         db.commit()
         return {"status": "already_added", "device_id": existing[0], "checks_created": 0, "skipped": {}}
-    device = Device(name=name, ip=target, hostname=hostname, is_monitored=str(host.get("status")) == "0", status="unknown")
+    device = Device(name=name, ip=target, hostname=hostname, is_monitored=str(host.get("status")) == "0", is_priority=False, status="unknown")
     db.add(device)
     db.flush()
     db.add(ZabbixHostImport(source_key=source_key(url), host_id=host_id, device_id=device.id))
@@ -360,12 +360,13 @@ def read_problems(db: Session = Depends(get_db)):
         params: dict[str, Any] = {"output": PROBLEM_FIELDS, "recent": False, "limit": 100,
                                   "sortfield": "eventid", "sortorder": "DESC"}
         hidden = hidden_host_ids(db, str(api.url))
-        if hidden:
-            host_ids = [row["hostid"] for row in api.rows("host.get", {"output": ["hostid"]})
-                        if row.get("hostid") and str(row["hostid"]) not in hidden]
-            if not host_ids:
-                return []
-            params["hostids"] = host_ids
+        inventory = api.rows("host.get", HOST_FIELDS)
+        matches = local_matches(db, str(api.url), inventory)
+        priority = {identifier for identifier, in db.query(Device.id).filter(Device.is_priority.is_(True))}
+        host_ids = [host_id for host_id, identifiers in matches.items() if host_id not in hidden and priority.intersection(identifiers)]
+        if not host_ids:
+            return []
+        params["hostids"] = host_ids
         rows = api.rows("problem.get", params)
         return [{key: visible(row.get(key), api.token) for key in PROBLEM_FIELDS} for row in rows[:100]]
 
@@ -383,14 +384,19 @@ def read_inventory(db: Session = Depends(get_db)):
 
 
 @fleet_router.get("/fleet")
-def fleet_overview(db: Session = Depends(get_db)):
-    local = {row.id: row for row in db.query(Device.id, Device.name, Device.ip, Device.site_id, Device.status)}
+def fleet_overview(db: Session = Depends(get_db), priority_only: bool = False):
+    query = db.query(Device.id, Device.name, Device.ip, Device.site_id, Device.status)
+    if priority_only:
+        query = query.filter(Device.is_priority.is_(True))
+    local = {row.id: row for row in query}
     zabbix_unavailable = False
     try:
         hosts = read_inventory(db)["hosts"]
     except HTTPException:
         hosts = []
         zabbix_unavailable = True
+    if priority_only:
+        hosts = [host for host in hosts if any(identifier in local for identifier in host["local_device_ids"])]
     covered = {identifier for host in hosts for identifier in host["local_device_ids"]}
     devices: list[dict[str, Any]] = [{"id": f"local-{item.id}", "name": item.name, "ip": item.ip, "site_id": item.site_id,
                 "status": item.status, "source": "zaddesh"} for item in local.values() if item.id not in covered]

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Generator
+from typing import Generator, cast
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
@@ -10,7 +10,7 @@ connect_args = {}
 if settings.database.url.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
 
-engine = create_engine(
+engine = None if settings.database.url.startswith(("mongodb://", "mongodb+srv://")) else create_engine(
     settings.database.url,
     echo=settings.database.echo,
     connect_args=connect_args,
@@ -31,17 +31,49 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor.close()
 
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-
 class Base(DeclarativeBase):
-    pass
+    def __getattribute__(self, name):
+        if not name.startswith("_"):
+            storage = object.__getattribute__(self, "__dict__").get("_mongo_session")
+            if storage is not None:
+                mapper = type(self).__mapper__
+                if name in mapper.relationships and name not in self.__dict__:
+                    return storage.related(self, mapper.relationships[name])
+        return super().__getattribute__(name)
+
+
+def SessionLocal():
+    if engine is None:
+        from zaddesh_core.mongo_store import MongoSession
+        return cast(Session, MongoSession())
+    return sessionmaker(autocommit=False, autoflush=False, bind=engine)()
 
 
 def get_db() -> Generator[Session, None, None]:
-    db = SessionLocal()
+    from fastapi import HTTPException
+    from pymongo.errors import PyMongoError
+    from zaddesh_core.mongo_store import StorageNotReady, WriteConflict
+    db = None
     try:
+        db = SessionLocal()
         yield db
+    except WriteConflict:
+        if db is not None:
+            db.rollback()
+        raise HTTPException(409, "A record changed concurrently. Retry the operation.") from None
+    except PyMongoError as error:
+        import logging
+        if getattr(error, "code", None) == 112:
+            if db is not None:
+                db.rollback()
+            raise HTTPException(409, "A record changed concurrently. Retry the operation.", headers={"Retry-After": "1"}) from None
+        logging.getLogger(__name__).error("MongoDB operation failed: %s (code %s)", type(error).__name__, getattr(error, "code", None))
+        if db is not None:
+            db.rollback()
+        raise HTTPException(503, "MongoDB storage is unavailable. Retry the operation.", headers={"Retry-After": "1"}) from None
+    except StorageNotReady:
+        raise HTTPException(503, "The database migration is still in progress") from None
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 

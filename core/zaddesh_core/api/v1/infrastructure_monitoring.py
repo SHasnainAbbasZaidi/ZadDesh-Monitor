@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 from zaddesh_core.api.deps import get_current_user, require_role
 from zaddesh_core.api.v1.zabbix import HOST_FIELDS, HostID, hidden_host_ids, host_health, host_interfaces, read_agent_hosts, saved_api, visible
 from zaddesh_core.database import get_db
+from zaddesh_core.models.infrastructure import Device
+from zaddesh_core.zabbix_import import target_name
 from zaddesh_core.infrastructure_monitoring import (
     average, classify, fresh_item, health_score, identifier, interface_name, item_kind, numeric, objects, persistent_pressure,
     port_utilization, settings_for_monitoring,
@@ -252,8 +254,12 @@ def snapshot(db):
 
 
 @router.get("")
-def monitoring_summary(db: Session = Depends(get_db)):
-    return snapshot(db)[0]
+def monitoring_summary(db: Session = Depends(get_db), priority_only: bool = False):
+    result = snapshot(db)[0]
+    if not priority_only:
+        return result
+    targets = {target_name(value) for row in db.query(Device.ip, Device.hostname).filter(Device.is_priority.is_(True)) for value in row if value}
+    return {**result, "devices": [device for device in result["devices"] if target_name(device["ip"]) in targets]}
 
 
 @router.get("/{host_id}", dependencies=[Depends(require_role(["admin"]))])

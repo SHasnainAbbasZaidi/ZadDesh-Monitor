@@ -9,7 +9,8 @@ server:
     - "http://localhost:8000"
 
 database:
-  url: "sqlite:///./zaddesh-live.db"
+  url: "mongodb://127.0.0.1:27017/zaddesh?replicaSet=zaddesh"
+  name: "zaddesh"
   echo: false
   pool_size: 20
   max_overflow: 10

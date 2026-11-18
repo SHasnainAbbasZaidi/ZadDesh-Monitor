@@ -62,6 +62,8 @@ class Device(Base):
     uptime_seconds: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_seen: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
     is_monitored: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_priority: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    collection_mode: Mapped[str] = mapped_column(String(16), default="scheduled", nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime,

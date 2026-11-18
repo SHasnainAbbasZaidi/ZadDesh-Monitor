@@ -1,3 +1,10 @@
+import os
+
+# HTTP fixtures use an isolated SQL engine. Native MongoDB tests opt into their
+# own validation database explicitly, including for background worker factories.
+if not os.environ.get("ZADDESH_MONGO_TEST_URI"):
+    os.environ["ZADDESH_DATABASE__URL"] = "sqlite:///:memory:"
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -63,6 +70,20 @@ def setup_test_db():
     yield
 
     Base.metadata.drop_all(bind=test_engine)
+
+
+@pytest.fixture(autouse=True)
+def isolate_http_test_workers(monkeypatch):
+    # HTTP tests share a transactional in-memory fixture. Background jobs use
+    # independent sessions and must be exercised by their dedicated tests, not
+    # concurrently against that fixture. Worker lifecycle tests override this.
+    from zaddesh_core import main
+
+    async def stopped_worker(stop):
+        await stop.wait()
+
+    for name in ("email_loop", "topology_loop", "integration_log_loop"):
+        monkeypatch.setattr(main, name, stopped_worker)
 
 
 @pytest.fixture

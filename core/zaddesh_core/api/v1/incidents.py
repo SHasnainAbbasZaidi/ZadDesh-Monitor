@@ -95,7 +95,7 @@ def alert_category():
     link = and_(contains(title, LINK_DOWN_TERMS), or_(contains(title, TEN_GIG_TERMS), contains(context, SERVER_TERMS), topology_link))
     offline = or_(Alert.title.ilike("device offline%"), Alert.title.ilike("device down%"),
                   and_(Alert.rule_id.is_(None), Alert.title.startswith("Availability: "),
-                       Check.check_type == "icmp", Device.status == "down"))
+                       Check.check_type.in_(("icmp", "snmp")), Device.status == "down"))
     resources = [(and_(contains(title, subjects), contains(title, triggers)), category)
                  for category, subjects, triggers in RESOURCE_CATEGORIES]
     return case((offline, "device_offline"), (link, "link_down"), *resources, else_="other")
@@ -134,7 +134,7 @@ def alert_summary(alert, incident, device, check, site, category):
 def joined_alerts(db: Session):
     return (db.query(Alert, Incident, Device, Check, Site, alert_category()).join(Device, Alert.device_id == Device.id)
             .outerjoin(Incident, Incident.alert_id == Alert.id).outerjoin(Check, Check.id == Alert.check_id)
-            .outerjoin(Site, Site.id == Device.site_id))
+            .outerjoin(Site, Site.id == Device.site_id).filter(Device.is_priority.is_(True)))
 
 
 @router.get("/alerts")
@@ -207,6 +207,8 @@ def list_incident_events(
     _: User = Depends(get_current_user), db: Session = Depends(get_db),
 ):
     query = db.query(Event)
+    if device_id is None:
+        query = query.outerjoin(Device, Device.id == Event.device_id).filter(or_(Event.device_id.is_(None), Device.is_priority.is_(True)))
     if hide_connection_noise:
         routine = or_(func.lower(Event.event_type).in_(CONNECTION_EVENT_TYPES), connection_noise(Event.title))
         query = query.filter(or_(Event.event_type.in_(("link_down", "device_offline", "uplink_down", "downlink_down")), ~routine))
@@ -248,22 +250,18 @@ def zabbix_incident_feed(
               "time_till": int(latest.replace(tzinfo=timezone.utc).timestamp()), "limit": 500}
     with saved_api(db) as api:
         hidden = hidden_host_ids(db, connection.api_url)
-        if device_id is not None or site_id is not None or hidden:
-            query = db.query(Device.id)
-            if device_id is not None:
-                query = query.filter(Device.id == device_id)
-            if site_id is not None:
-                query = query.filter(Device.site_id == site_id)
-            inventory = api.rows("host.get", HOST_FIELDS)
-            if device_id is not None or site_id is not None:
-                selected_ids = {row[0] for row in query}
-                matching = local_matches(db, connection.api_url, inventory)
-                host_ids = [key for key, ids in matching.items() if key not in hidden and selected_ids.intersection(ids)]
-            else:
-                host_ids = [str(row["hostid"]) for row in inventory if row.get("hostid") and str(row["hostid"]) not in hidden]
-            if not host_ids:
-                return {"configured": True, "entries": [], "limited": False, "total": 0, "scan_limited": False}
-            params["hostids"] = host_ids
+        query = db.query(Device.id).filter(Device.is_priority.is_(True))
+        if device_id is not None:
+            query = query.filter(Device.id == device_id)
+        if site_id is not None:
+            query = query.filter(Device.site_id == site_id)
+        inventory = api.rows("host.get", HOST_FIELDS)
+        selected_ids = {row[0] for row in query}
+        matching = local_matches(db, connection.api_url, inventory)
+        host_ids = [key for key, ids in matching.items() if key not in hidden and selected_ids.intersection(ids)]
+        if not host_ids:
+            return {"configured": True, "entries": [], "limited": False, "total": 0, "scan_limited": False}
+        params["hostids"] = host_ids
         fields = ["eventid", "name", "severity", "clock", "acknowledged", "suppressed"]
         if kind == "problems":
             records = api.rows("problem.get", {**params, "recent": False, "output": fields})

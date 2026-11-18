@@ -29,10 +29,10 @@ try {
     Push-Location core
     try {
         if ($Test) { Run-Native $venv -m pytest; return }
-        if ($Seed -and ($env:ZADDESH_DEMO_MODE -ne "true" -or $env:ZADDESH_DATABASE__URL -notlike "sqlite:///*zaddesh-demo.db")) {
-            throw "Set ZADDESH_DEMO_MODE=true and use a separate SQLite file named zaddesh-demo.db before seeding"
+        if ($Seed -and ($env:ZADDESH_DEMO_MODE -ne "true" -or $env:ZADDESH_DATABASE__URL -notmatch "^mongodb(?:\+srv)?://.+/zaddesh_demo(?:\?|$)")) {
+            throw "Set ZADDESH_DEMO_MODE=true and use a separate MongoDB database named zaddesh_demo before seeding"
         }
-        Run-Native $venv -m alembic upgrade head
+        Run-Native $venv -m zaddesh_core.storage_init
         if ($Seed) { Run-Native $venv -m zaddesh_core.seed; return }
         Run-Native $venv -m uvicorn zaddesh_core.main:app --host 127.0.0.1 --port "$Port" --no-proxy-headers
     } finally { Pop-Location }

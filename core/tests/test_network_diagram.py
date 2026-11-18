@@ -50,7 +50,7 @@ def test_discovery_rbac_merge_publication_and_link_recovery(client, db_session, 
 
     def seed(name, ip):
         created = client.post("http://127.0.0.1/api/v1/devices", headers=admin_headers, json={
-            "name": name, "ip": ip, "initial_check_types": [],
+            "name": name, "ip": ip, "initial_check_types": [], "is_priority": True,
             "initial_snmp": {"params": {"version": "3", "security_level": "authNoPriv"}, "credentials": credentials},
         })
         assert created.status_code == 201

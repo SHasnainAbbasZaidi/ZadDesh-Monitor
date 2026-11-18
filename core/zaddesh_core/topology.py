@@ -150,7 +150,7 @@ def neighbors(data: dict[str, str]):
     cdp_names = column(data, CDP + ".6")
     for suffix, remote_port in column(data, CDP + ".7").items():
         index = suffix.split(".")[0]
-        name = cdp_names.get(suffix)
+        name = cdp_names.get(suffix) or ""
         local = interface_names.get(index) or index
         if index not in lldp_indices and not any(port_key(lldp_ports.get(i, i)) == port_key(local) for i in lldp_indices) and name and remote_port:
             yield "cdp", index, local, name, remote_port, []
@@ -171,6 +171,9 @@ def link_incident(db: Session, link: TopologyLink, device: Device, now: datetime
     elif link.status == "down":
         title = f"Link Down: {device.name} · {link.source_port}"[:255]
         message = f"Interface {link.source_port} on {device.name} reported down. Remote port: {link.target_port}."
+        if not device.is_priority:
+            db.add(Event(device_id=device.id, event_type="link_down", severity="warning", title=title, message=message, timestamp=now))
+            return
         if alert is None:
             alert = Alert(device_id=device.id, severity="critical", status="active", title=title, message=message, triggered_at=now)
             db.add(alert)
@@ -240,9 +243,9 @@ def merge_observation(db: Session, diagram_id: int, device: Device, data: dict[s
         for alias in {item.name.casefold(), (item.hostname or "").casefold(), item.ip.casefold()} - {""}:
             known_names[alias] = item if alias not in known_names else None
     inventory = {item.id: item for item in known}
-    for item in nodes:
-        alias = str(item.metadata_json.get("sys_name") or "").strip().casefold()
-        identity = inventory.get(item.device_id)
+    for topology_node in nodes:
+        alias = str(topology_node.metadata_json.get("sys_name") or "").strip().casefold()
+        identity = inventory.get(topology_node.device_id) if topology_node.device_id is not None else None
         if alias and identity and (alias not in known_names or known_names[alias] != identity):
             known_names[alias] = identity if alias not in known_names else None
 

@@ -303,7 +303,7 @@ def simulate(payload: Simulation, db: Session = Depends(get_db)):
 
 class TestEmail(Input):
     recipient_ids: list[Annotated[int, Field(gt=0)]] = Field(min_length=1, max_length=20)
-    event: Simulation = Field(default_factory=Simulation)
+    event: Simulation = Field(default_factory=lambda: Simulation(ip="", duration_minutes=0))
 
 
 @router.post("/test-email", status_code=202)

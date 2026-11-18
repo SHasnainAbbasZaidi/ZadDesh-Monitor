@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import func, or_, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import SQLAlchemyError
+from pymongo.errors import PyMongoError
 from sqlalchemy.orm import Session
 
 from zaddesh_core.api.deps import get_current_user, require_role, verify_collector_token
@@ -99,9 +100,9 @@ def graph(db: Session, item: TopologyDiagram):
     alerts = dict(db.query(Alert.device_id, func.count(Alert.id)).filter(
         Alert.status.in_(("active", "acknowledged")),
     ).group_by(Alert.device_id).all())
-    rows = db.query(TopologyNode, Device).outerjoin(Device, TopologyNode.device_id == Device.id).filter(
+    rows = list[tuple[TopologyNode, Device | None]](db.query(TopologyNode, Device).outerjoin(Device, TopologyNode.device_id == Device.id).filter(
         TopologyNode.diagram_id == item.id,
-    ).order_by(TopologyNode.id).all()
+    ).order_by(TopologyNode.id).all())
     rows = [(node, device) for node, device in rows if device or node.manual or identifiable_neighbor(node.label)]
     node_ids = {node.id for node, _ in rows}
     aliases: dict[str, list[int]] = {}
@@ -116,7 +117,7 @@ def graph(db: Session, item: TopologyDiagram):
             canonical[node.id] = matches[0]
     rows = [(node, device) for node, device in rows if node.id not in canonical]
     link_rows = db.query(TopologyLink).filter_by(diagram_id=item.id).order_by(TopologyLink.manual.desc(), TopologyLink.id)
-    links = {}
+    links: dict[str, tuple[TopologyLink, int, int]] = {}
     for link in link_rows:
         source = canonical.get(link.source_id, link.source_id)
         target = canonical.get(link.target_id, link.target_id)
@@ -198,7 +199,7 @@ def allowed(address: str) -> bool:
 def discoverable(check: Check, device: Device, findings: bool = False) -> bool:
     params = check.params or {}
     version = params.get("version", "3")
-    return (check.is_enabled and device.is_monitored and check.check_type == "snmp"
+    return (check.is_enabled and device.is_monitored and device.collection_mode == "scheduled" and check.check_type == "snmp"
             and check.target == device.ip and allowed(device.ip)
             and ((findings and version == "2c") or (version == "3"
                  and params.get("security_level", "authPriv") in {"authPriv", "authNoPriv"}))
@@ -272,7 +273,7 @@ async def topology_loop(stop: asyncio.Event) -> None:
         for findings in (False, True):
             try:
                 await asyncio.to_thread(schedule_inventory_once, findings=findings)
-            except (SQLAlchemyError, HTTPException) as error:
+            except (SQLAlchemyError, PyMongoError, HTTPException) as error:
                 logger.warning("%s topology scheduling will retry (%s)", "Findings" if findings else "Automatic", type(error).__name__)
         try:
             await asyncio.wait_for(stop.wait(), 15)

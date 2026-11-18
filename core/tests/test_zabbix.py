@@ -107,13 +107,14 @@ def test_read_only_connection_inventory_problems_and_validation(client, db_sessi
     assert client.get(root + "/hosts", headers=admin_headers).json()["hosts"][0]["name"] == "Validation host"
     remote["host.get"].append({"hostid": "8", "name": "New external device", "status": "0"})
     assert len(client.get(root + "/hosts", headers=admin_headers).json()["hosts"]) == 2
-    assert client.get(root + "/problems", headers=admin_headers).json()[0]["name"] == "Link down"
+    assert client.get(root + "/problems", headers=admin_headers).json() == []
     assert client.get(root + "/problems", headers=viewer_headers).status_code == 403
 
     device = client.post("/api/v1/devices", headers=admin_headers, json={
-        "name": "Validation host", "ip": "192.0.2.10", "initial_check_types": ["icmp"],
+        "name": "Validation host", "ip": "192.0.2.10", "initial_check_types": ["icmp"], "is_priority": True,
     }).json()
     preferred = client.get(root + "/inventory", headers=admin_headers).json()
+    assert client.get(root + "/problems", headers=admin_headers).json()[0]["name"] == "Link down"
     assert preferred["hosts"][0]["local_device_ids"] == [device["id"]]
     assert preferred["hosts"][1]["local_device_ids"] == []
     assert client.get(f"/api/v1/devices/{device['id']}", headers=admin_headers).status_code == 200

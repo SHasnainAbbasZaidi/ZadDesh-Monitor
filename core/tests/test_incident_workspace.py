@@ -31,7 +31,7 @@ def test_incident_lifecycle_including_buffered_flaps(client, admin_headers, view
     token = token_hex(32)
     monkeypatch.setattr(settings.collector, "shared_secret", token)
     created = client.post("/api/v1/devices", headers=admin_headers, json={
-        "name": "Incident test", "ip": "192.0.2.4", "initial_check_types": ["http"],
+        "name": "Incident test", "ip": "192.0.2.4", "initial_check_types": ["http"], "is_priority": True,
     })
     device = created.json()["id"]
     check = client.get(f"/api/v1/checks?device_id={device}", headers=admin_headers).json()[0]["id"]
@@ -80,7 +80,7 @@ def test_repeated_probe_failures_keep_counts_and_suppression_transitions(
     token = token_hex(32)
     monkeypatch.setattr(settings.collector, "shared_secret", token)
     device = client.post("/api/v1/devices", headers=admin_headers, json={
-        "name": "Repeated failure", "ip": "192.0.2.21", "initial_check_types": ["icmp"],
+        "name": "Repeated failure", "ip": "192.0.2.21", "initial_check_types": ["icmp"], "is_priority": True,
     }).json()["id"]
     check = client.get(f"/api/v1/checks?device_id={device}", headers=admin_headers).json()[0]["id"]
     start = utc_now() - timedelta(minutes=2)

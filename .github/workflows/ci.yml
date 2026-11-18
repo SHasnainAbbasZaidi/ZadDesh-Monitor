@@ -59,6 +59,37 @@ jobs:
           cargo +stable build --release --locked
         working-directory: collector
 
+  native-mongo:
+    runs-on: ubuntu-latest
+    env:
+      ZADDESH_DATABASE__URL: mongodb://127.0.0.1:27017/zaddesh_validation?replicaSet=zaddesh
+      ZADDESH_MONGO_TEST_URI: mongodb://127.0.0.1:27017/zaddesh_validation?replicaSet=zaddesh
+      ZADDESH_LOGS__MONGO_URI: mongodb://127.0.0.1:27017/zaddesh_validation?replicaSet=zaddesh
+      ZADDESH_LOGS__DATABASE: zaddesh_validation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install core
+        run: python -m pip install -e "./core[dev]"
+      - name: Start isolated MongoDB replica set
+        run: |
+          docker run -d --name zaddesh-mongo -p 127.0.0.1:27017:27017 mongo:8 --replSet zaddesh --bind_ip_all
+          for attempt in $(seq 1 60); do
+            if docker exec zaddesh-mongo mongosh --quiet --eval 'db.adminCommand({ping:1})'; then break; fi
+            sleep 1
+          done
+          docker exec zaddesh-mongo mongosh --quiet --eval 'rs.initiate({_id:"zaddesh",members:[{_id:0,host:"127.0.0.1:27017"}]})'
+          for attempt in $(seq 1 60); do
+            if docker exec zaddesh-mongo mongosh --quiet --eval 'if (!db.hello().isWritablePrimary) quit(1)'; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Native persistence and migration regressions
+        run: python -m pytest tests/test_mongo_store.py -q
+        working-directory: core
+
   ruby-rules:
     runs-on: ubuntu-latest
     steps:

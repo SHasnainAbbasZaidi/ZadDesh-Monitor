@@ -25,8 +25,10 @@ from zaddesh_core.security import hash_password, hash_token
 
 
 def seed_database():
-    if not settings.demo_mode or not settings.database.url.startswith("sqlite:///") or not settings.database.url.endswith("zaddesh-demo.db"):
-        raise SystemExit("Use ZADDESH_DEMO_MODE=true and a separate SQLite file named zaddesh-demo.db")
+    from urllib.parse import urlsplit
+    target = urlsplit(settings.database.url)
+    if not settings.demo_mode or target.scheme not in {"mongodb", "mongodb+srv"} or target.path != "/zaddesh_demo":
+        raise SystemExit("Use ZADDESH_DEMO_MODE=true and a separate MongoDB database named zaddesh_demo")
     password = os.getenv("ZADDESH_DEMO_PASSWORD", "")
     if len(password) < 16:
         raise SystemExit("Set ZADDESH_DEMO_PASSWORD to a unique password of at least 16 characters")

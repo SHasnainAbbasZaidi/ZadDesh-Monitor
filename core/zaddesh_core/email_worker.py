@@ -12,6 +12,7 @@ from cryptography.exceptions import InvalidTag
 from fastapi import HTTPException
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
+from pymongo.errors import PyMongoError
 
 from zaddesh_core.config import settings
 from zaddesh_core.database import SessionLocal
@@ -22,6 +23,7 @@ from zaddesh_core.email_smtp import SMTPOutcome, smtp_operation
 from zaddesh_core.infrastructure_monitoring import classify, identifier, objects
 from zaddesh_core.models.email_alerts import EmailAttempt, EmailDelivery, EmailProblem, EmailRecipient, EmailRule, EmailSettings, EmailTemplate
 from zaddesh_core.models.zabbix import ZabbixConnection
+from zaddesh_core.models.infrastructure import Device
 from zaddesh_core.security import decrypt_secret
 
 logger = logging.getLogger(__name__)
@@ -183,7 +185,18 @@ def action_slots(rule, problem, age):
         yield "reminder", str(max(due))
 
 
+def priority_target(db, context):
+    address = context.get("ip")
+    name = context.get("name", context.get("device", ""))
+    query = db.query(Device).filter(Device.is_priority.is_(True))
+    if address:
+        return query.filter(or_(Device.ip == address, Device.hostname == address)).first() is not None
+    return bool(name and query.filter(Device.name == name).first() is not None)
+
+
 def schedule_problem(db, config, problem, rules, recipients, now, capacity):
+    if not priority_target(db, problem.context):
+        return capacity
     context = {**problem.context, "severity": problem.severity, "resolved_at": problem.resolved_at}
     if problem.suppressed and problem.resolved_at is None:
         return capacity
@@ -410,6 +423,10 @@ def send_once(now=None):
         if notice is None:
             db.commit()
             return
+        if notice.kind != "test" and not priority_target(db, notice.payload):
+            notice.status, notice.last_error = "cancelled", "Device priority is disabled"
+            db.commit()
+            return
         recipient = db.get(EmailRecipient, notice.recipient_id) if notice.recipient_id else None
         if recipient is None or not recipient.config["enabled"] or recipient.address_key != notice.address.casefold():
             notice.status, notice.last_error = "cancelled", "Recipient was disabled, removed, or changed"
@@ -474,7 +491,7 @@ async def email_loop(stop):
         while not stop.is_set():
             try:
                 await asyncio.to_thread(job)
-            except (SQLAlchemyError, ValueError, OSError):
+            except (SQLAlchemyError, PyMongoError, ValueError, OSError):
                 logger.warning("Email notification worker could not complete a cycle")
             try:
                 await asyncio.wait_for(stop.wait(), interval)

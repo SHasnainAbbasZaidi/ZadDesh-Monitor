@@ -15,10 +15,10 @@ if [[ "$mode" == build-ui ]]; then exit; fi
 cd core
 python="$root/.venv/bin/python"
 if [[ "$mode" == test ]]; then exec "$python" -m pytest; fi
-if [[ "$mode" == seed && ( "${ZADDESH_DEMO_MODE:-}" != true || "${ZADDESH_DATABASE__URL:-}" != sqlite:///*zaddesh-demo.db ) ]]; then
-    echo "Set ZADDESH_DEMO_MODE=true and use a separate SQLite file named zaddesh-demo.db before seeding" >&2
+if [[ "$mode" == seed && ( "${ZADDESH_DEMO_MODE:-}" != true || "${ZADDESH_DATABASE__URL:-}" != mongodb*://*/zaddesh_demo* ) ]]; then
+    echo "Set ZADDESH_DEMO_MODE=true and use a separate MongoDB database named zaddesh_demo before seeding" >&2
     exit 2
 fi
-"$python" -m alembic upgrade head
+"$python" -m zaddesh_core.storage_init
 if [[ "$mode" == seed ]]; then exec "$python" -m zaddesh_core.seed; fi
 exec "$python" -m uvicorn zaddesh_core.main:app --host 127.0.0.1 --port "${ZADDESH_PORT:-8000}" --no-proxy-headers

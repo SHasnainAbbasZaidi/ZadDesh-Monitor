@@ -55,6 +55,8 @@ class DeviceBase(BaseModel):
     vendor: Optional[str] = None
     model: Optional[str] = None
     is_monitored: bool = True
+    is_priority: bool = False
+    collection_mode: Literal["scheduled", "on_demand"] = "scheduled"
 
 
 class DeviceCreate(DeviceBase):
@@ -74,6 +76,8 @@ class DeviceUpdate(BaseModel):
     vendor: Optional[str] = None
     model: Optional[str] = None
     is_monitored: Optional[bool] = None
+    is_priority: Optional[bool] = None
+    collection_mode: Optional[Literal["scheduled", "on_demand"]] = None
 
 
 class DeviceRead(DeviceBase):

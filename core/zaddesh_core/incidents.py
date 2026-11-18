@@ -44,6 +44,9 @@ def timeline(db: Session, alert_id: int, timestamp: datetime, kind: str, message
 
 
 def queue_delivery(db: Session, alert: Alert, event: str, timestamp: datetime) -> None:
+    device = db.get(Device, alert.device_id)
+    if device is None or not device.is_priority:
+        return
     if settings.features.incident_webhook_url and not settings.demo_mode and alert.severity != "info":
         db.add(IncidentDelivery(alert_id=alert.id, event=event, next_attempt=utc_now(), payload=redact({
             "alert_id": alert.id, "event": event, "title": alert.title, "message": alert.message,
@@ -81,6 +84,8 @@ def record_availability(
         db.add(Event(device_id=device.id, check_id=check.id, event_type="state_change",
                      severity="info" if ok else "critical", title=f"Availability: {check.name}",
                      message="Probe passed" if ok else "Probe failed", timestamp=timestamp))
+    if not device.is_priority:
+        return
     if alert is None:
         if ok and previous != "critical":
             return
@@ -135,7 +140,7 @@ def record_availability(
     if any(window.start_time <= timestamp < window.end_time
            for kind, scope in scopes if kind == "all" or scope is not None
            for window in maintenance.get((kind, scope), ())):
-        reason = "maintenance"
+        reason: str | None = "maintenance"
     else:
         reason = "parent down" if device.id in down_parents else None
     if (changed or incident.suppression) and not reason and not (incident.silenced_until and incident.silenced_until > timestamp):

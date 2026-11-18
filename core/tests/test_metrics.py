@@ -145,7 +145,7 @@ def test_availability_uses_assertion_and_old_samples_cannot_reopen_incident(clie
     token = secrets.token_hex(32)
     monkeypatch.setattr(settings.collector, "shared_secret", token)
     collector = {"Authorization": f"Bearer {token}"}
-    device_id = client.post("/api/v1/devices", json={"name": "HTTP target", "ip": "127.0.0.1", "initial_check_types": ["http"]}, headers=admin_headers).json()["id"]
+    device_id = client.post("/api/v1/devices", json={"name": "HTTP target", "ip": "127.0.0.1", "initial_check_types": ["http"], "is_priority": True}, headers=admin_headers).json()["id"]
     check_id = client.get(f"/api/v1/checks?device_id={device_id}", headers=admin_headers).json()[0]["id"]
     now = datetime.datetime.now(datetime.timezone.utc)
 

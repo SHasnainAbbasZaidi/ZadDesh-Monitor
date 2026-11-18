@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from zaddesh_core.database import get_db
+from zaddesh_core.mongo_store import MongoSession
 from zaddesh_core.models.infrastructure import Device, Collector
 from zaddesh_core.models.checks import Check
 from zaddesh_core.models.alerts import Alert
@@ -29,7 +30,10 @@ def health_check():
 def readiness_check(db: Session = Depends(get_db)):
     """Readiness probe: verifies database connectivity."""
     try:
-        db.execute(text("SELECT fingerprint FROM metrics_raw LIMIT 1"))
+        if isinstance(db, MongoSession):
+            db.ping()
+        else:
+            db.execute(text("SELECT fingerprint FROM metrics_raw LIMIT 1"))
         return {"status": "ready", "database": "connected"}
     except Exception:
         raise HTTPException(503, "Database unavailable") from None
@@ -44,7 +48,7 @@ def system_info(db: Session = Depends(get_db)):
     alert_count = db.query(Alert).filter(Alert.status == "active").count()
     collector_count = db.query(Collector).count()
 
-    db_type = "sqlite" if settings.database.url.startswith("sqlite") else "postgresql"
+    db_type = db.get_bind().dialect.name
 
     return SystemInfo(
         version="0.1.0",

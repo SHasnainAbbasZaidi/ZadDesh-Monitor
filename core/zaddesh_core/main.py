@@ -19,6 +19,7 @@ from zaddesh_core.api.v1.network_diagram import topology_loop
 from zaddesh_core.api.v1.system import router as system_root_router
 from zaddesh_core.incident_delivery import delivery_loop
 from zaddesh_core.email_worker import email_loop
+from zaddesh_core.integration_logs import integration_log_loop
 
 
 @asynccontextmanager
@@ -29,11 +30,12 @@ async def lifespan(_app: FastAPI):
     topology = (asyncio.create_task(topology_loop(stop)) if settings.features.network_diagram_beta
                 and not settings.demo_mode else None)
     email = asyncio.create_task(email_loop(stop)) if not settings.demo_mode else None
+    integrated_logs = asyncio.create_task(integration_log_loop(stop)) if not settings.demo_mode else None
     try:
         yield
     finally:
         stop.set()
-        await asyncio.gather(*(task for task in (worker, topology, email) if task is not None))
+        await asyncio.gather(*(task for task in (worker, topology, email, integrated_logs) if task is not None))
 
 
 app = FastAPI(
@@ -75,6 +77,12 @@ LIMITS = {"/api/v1/auth/login": 12, "/api/v1/auth/setup": 12,
 async def add_process_time_header(request: Request, call_next):
     start_time = time.monotonic()
     path = request.url.path.rstrip("/")
+    if request.method == "POST" and path.startswith("/api/v1/collectors/inventory-result/"):
+        length = request.headers.get("content-length", "")
+        if not length.isascii() or not length.isdecimal():
+            return JSONResponse({"detail": "Content-Length is required"}, status_code=411)
+        if len(length) > 9 or int(length) > 8 * 1024 * 1024:
+            return JSONResponse({"detail": "Inventory result is too large"}, status_code=413)
     if request.method == "POST" and path in LIMITS:
         length = request.headers.get("content-length", "")
         if not length.isascii() or not length.isdecimal():

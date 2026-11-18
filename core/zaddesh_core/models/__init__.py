@@ -30,6 +30,7 @@ from zaddesh_core.models.email_alerts import EmailAttempt, EmailDelivery, EmailP
 from zaddesh_core.models.topology import TopologyDiagram, TopologyNode, TopologyLink, TopologyRun, TopologyChange
 from zaddesh_core.models.zabbix import ZabbixAlertDismissal, ZabbixConnection, ZabbixHostImport
 from zaddesh_core.models.integrations import IntegrationConnection
+from zaddesh_core.models.workstations import WorkstationInventory
 from zaddesh_core.models.system import (
     Dashboard,
     Widget,
@@ -86,6 +87,7 @@ __all__ = [
     "TopologyChange",
     "ZabbixConnection",
     "IntegrationConnection",
+    "WorkstationInventory",
     "ZabbixAlertDismissal",
     "ZabbixHostImport",
     "Widget",
