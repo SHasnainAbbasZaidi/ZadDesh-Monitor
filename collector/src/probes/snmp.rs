@@ -208,10 +208,15 @@ async fn collect(task: &CheckTask) -> Result<Vec<Reading>, ProbeError> {
         if bindings.is_empty() {
             return Err("SNMP object not returned by agent");
         }
-        return Ok(bindings
+        let readings: Vec<Reading> = bindings
             .into_iter()
             .filter_map(|(_, value)| value)
-            .collect());
+            .collect();
+        return if readings.is_empty() {
+            Err("SNMP object has no numeric value")
+        } else {
+            Ok(readings)
+        };
     }
     let prefix = format!("{}.", root.to_string().trim_start_matches('.'));
     let mut current = root;
@@ -235,7 +240,11 @@ async fn collect(task: &CheckTask) -> Result<Vec<Reading>, ProbeError> {
     if !found {
         return Err("SNMP subtree not returned by agent");
     }
-    Ok(readings)
+    if readings.is_empty() {
+        Err("SNMP object has no numeric value")
+    } else {
+        Ok(readings)
+    }
 }
 
 const TOPOLOGY_ROOTS: &[&str] = &[
@@ -344,6 +353,25 @@ pub async fn discover_workstation(
     walk_roots(task, ROOTS, true).await
 }
 
+fn alarm_roots(values: &BTreeMap<String, String>) -> Vec<&'static str> {
+    let object = values
+        .get("1.3.6.1.2.1.1.2.0")
+        .map(|value| value.trim_start_matches('.'))
+        .unwrap_or("");
+    if object.starts_with("1.3.6.1.4.1.9.") {
+        vec!["1.3.6.1.4.1.9.9.13.1"]
+    } else if object.starts_with("1.3.6.1.4.1.8072.") || object.starts_with("1.3.6.1.4.1.2021.") {
+        vec![
+            "1.3.6.1.4.1.2021.9.1.100",
+            "1.3.6.1.4.1.2021.10.1.100",
+            "1.3.6.1.4.1.2021.2.1.100",
+            "1.3.6.1.4.1.2021.4.100",
+        ]
+    } else {
+        vec![]
+    }
+}
+
 async fn walk_roots(
     task: &CheckTask,
     roots: &[&str],
@@ -364,7 +392,11 @@ async fn walk_roots(
         })??;
     let mut values = BTreeMap::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(55);
-    for root in roots {
+    let mut pending = roots.to_vec();
+    let mut root_index = 0;
+    while root_index < pending.len() {
+        let root = &pending[root_index];
+        root_index += 1;
         if tokio::time::Instant::now() >= deadline || values.len() >= 8000 {
             break;
         }
@@ -449,6 +481,10 @@ async fn walk_roots(
             }
             current = next.expect("checked presence above");
         }
+        // Optional alarms run after existing discovery, within its unchanged global limits.
+        if root_index == roots.len() {
+            pending.extend(alarm_roots(&values));
+        }
     }
     if values.is_empty() {
         Err(if v1 {
@@ -484,8 +520,19 @@ pub async fn probe_snmp(task: &CheckTask) -> ProbeResult {
         .err()
         .map(|error| HashMap::from([("reason".to_string(), error.to_string())]))
         .unwrap_or_default();
+    let unsupported = matches!(
+        readings,
+        Err("SNMP object not returned by agent"
+            | "SNMP subtree not returned by agent"
+            | "SNMP object has no numeric value")
+    );
     let mut metrics = vec![point(
-        "snmp.available".into(),
+        if unsupported {
+            "snmp.supported"
+        } else {
+            "snmp.available"
+        }
+        .into(),
         if readings.is_ok() { 1.0 } else { 0.0 },
         reason,
     )];
@@ -500,7 +547,14 @@ pub async fn probe_snmp(task: &CheckTask) -> ProbeResult {
             }
             (ProbeStatus::Ok, "SNMP probe succeeded")
         }
-        Err(error) => (ProbeStatus::Critical, error),
+        Err(error) => (
+            if unsupported {
+                ProbeStatus::Warning
+            } else {
+                ProbeStatus::Critical
+            },
+            error,
+        ),
     };
     ProbeResult {
         check_id: task.check_id,
@@ -514,6 +568,49 @@ pub async fn probe_snmp(task: &CheckTask) -> ProbeResult {
 #[cfg(test)]
 mod identity_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn unsupported_udp_responses_never_emit_a_healthy_or_failed_availability() {
+        use tokio::net::UdpSocket;
+        for tag in [0x80, 0x81, 0x05] {
+            let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let port = socket.local_addr().unwrap().port();
+            let agent = tokio::spawn(async move {
+                let mut buffer = [0; 2048];
+                let (length, peer) = socket.recv_from(&mut buffer).await.unwrap();
+                let mut response = buffer[..length].to_vec();
+                let pdu = response.iter().position(|byte| *byte == 0xa0).unwrap();
+                response[pdu] = 0xa2;
+                assert_eq!(&response[length - 2..], &[0x05, 0]);
+                response[length - 2] = tag;
+                socket.send_to(&response, peer).await.unwrap();
+            });
+            let task: CheckTask = serde_json::from_value(serde_json::json!({
+                "check_id":1,"device_id":1,"device_name":"UDP lab","name":"Unsupported object",
+                "check_type":"snmp","target":"127.0.0.1","interval_seconds":30,"timeout_seconds":2,"retries":0,
+                "params":{"version":"2c","port":port,"oid":"1.3.6.1.2.1.25.3.3.1.2.1"},
+                "snmp_credentials":{"community":"lab-fixture"}
+            })).unwrap();
+            let result = probe_snmp(&task).await;
+            agent.await.unwrap();
+            assert_eq!(result.metrics.len(), 1);
+            assert_eq!(result.metrics[0].metric_key, "snmp.supported");
+            assert_eq!(result.metrics[0].value, 0.0);
+            assert!(matches!(result.status, ProbeStatus::Warning));
+        }
+    }
+
+    #[test]
+    fn optional_alarm_reads_require_a_recognized_reported_enterprise() {
+        let mut values = BTreeMap::new();
+        assert!(alarm_roots(&values).is_empty());
+        values.insert("1.3.6.1.2.1.1.2.0".into(), ".1.3.6.1.4.1.9.1.1227".into());
+        assert_eq!(alarm_roots(&values), vec!["1.3.6.1.4.1.9.9.13.1"]);
+        values.insert("1.3.6.1.2.1.1.2.0".into(), "1.3.6.1.4.1.8072.3.2.10".into());
+        assert_eq!(alarm_roots(&values).len(), 4);
+        values.insert("1.3.6.1.2.1.1.2.0".into(), "1.3.6.1.4.1.99999.1".into());
+        assert!(alarm_roots(&values).is_empty());
+    }
 
     #[test]
     fn multiline_identity_stays_text_while_binary_stays_hex() {
