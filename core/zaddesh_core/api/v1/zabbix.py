@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ssl
+import re
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
@@ -26,7 +27,7 @@ from zaddesh_core.models.metrics import MetricRaw
 from zaddesh_core.models.zabbix import ZabbixConnection, ZabbixHiddenHost, ZabbixHostImport
 from zaddesh_core.security import allows_secret_transport, decrypt_secret, encrypt_secret
 from zaddesh_core.zabbix import ZabbixAPI, normalize_url
-from zaddesh_core.hardware_identity import identity, clean
+from zaddesh_core.hardware_identity import identity, clean, snmp_identity, ENTITY
 from zaddesh_core.zabbix_import import canonical_ip, duration, interface_target, prepare_checks, resolve_interface_credentials, target_name
 
 admin = require_role(["admin"])
@@ -208,17 +209,24 @@ def hardware_items(api, rows):
         return previous[1]
     try:
         items = api.rows("item.get", {"hostids": [str(row["hostid"]) for row in rows],
-            "output": ["hostid", "key_", "name", "lastvalue"],
-            "search": {"key_": ["system.hw", "system.descr", "system.objectid", "sysDescr", "sysObjectID", "entPhysical"]},
+            "output": ["hostid", "key_", "name", "lastvalue", "snmp_oid"],
+            "search": {"key_": ["system.hw", "system.descr", "system.objectid", "sysDescr", "sysObjectID", "entPhysical"],
+                       "snmp_oid": ["1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0", "1.3.6.1.2.1.47.1.1.1.1."]},
             "searchByAny": True, "limit": 1000}) if rows else []
     except HTTPException:
         return {}  # Inventory remains usable when item-read permission is absent.
     result = {}
+    observations = {}
     for item in items:
         fields = result.setdefault(str(item.get("hostid")), {})
         name, value = str(item.get("key_", "")).lower(), clean(item.get("lastvalue"))
         if not value:
             continue
+        oid = re.fullmatch(r'(?:get\[)?\.?(\d+(?:\.\d+)+)\]?', str(item.get("snmp_oid", "")).strip())
+        if oid:
+            observations.setdefault(str(item.get("hostid")), {})[oid[1]] = value
+        if (oid and oid[1].startswith(ENTITY)) or "entphysical" in name:
+            continue  # Physical rows must be selected by class, never first module model.
         if "model" in name:
             fields.setdefault("model", value)
         elif "vendor" in name or "manufacturer" in name or name.startswith("system.hw.chassis"):
@@ -229,6 +237,9 @@ def hardware_items(api, rows):
             fields.setdefault("description", value)
         elif "objectid" in name:
             fields.setdefault("object_id", value)
+    for host_id, values in observations.items():
+        fields = result.setdefault(host_id, {})
+        fields.update({key: value for key, value in snmp_identity(values).items() if value})
     if len(_identity_cache) > 8:
         _identity_cache.clear()
     _identity_cache[key] = (monotonic(), result)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import secrets
 from pathlib import Path
-from typing import Any, List, Literal
+from typing import Annotated, Any, List, Literal
 import yaml
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
@@ -69,6 +69,17 @@ class FeaturesConfig(BaseModel):
     incident_webhook_url: str | None = Field(default=None, repr=False)
 
 
+class HardwareProduct(BaseModel):
+    vendor: str = Field(min_length=1, max_length=64)
+    model: str = Field(min_length=1, max_length=64)
+
+
+class SnmpIdentityConfig(BaseModel):
+    # Exact numeric sysObjectIDs only: configuration is data, never executable MIB code.
+    products: dict[Annotated[str, Field(pattern=r"^1\.3\.6\.1\.4\.1\.\d+(?:\.\d+)*$")], HardwareProduct] = Field(default_factory=dict)
+    enterprises: dict[Annotated[str, Field(pattern=r"^\d+$")], Annotated[str, Field(min_length=1, max_length=64)]] = Field(default_factory=dict)
+
+
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     format: str = "json"
@@ -117,6 +128,7 @@ class AppSettings(BaseSettings):
     features: FeaturesConfig = Field(default_factory=FeaturesConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    snmp_identity: SnmpIdentityConfig = Field(default_factory=SnmpIdentityConfig)
 
     model_config = SettingsConfigDict(
         env_prefix="ZADDESH_",

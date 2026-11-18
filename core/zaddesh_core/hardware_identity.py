@@ -1,5 +1,6 @@
 """Hardware identity from reported inventory and standard SNMP identity objects."""
 import re
+from zaddesh_core.config import settings
 
 # Cisco's published CISCO-ENTITY-VENDORTYPE-OID-MIB, cevChassisN3kC3064PQ10GX.
 # https://github.com/cisco/cisco-mibs/blob/main/v2/CISCO-ENTITY-VENDORTYPE-OID-MIB.my
@@ -22,19 +23,23 @@ ENTITY = '1.3.6.1.2.1.47.1.1.1.1.'
 
 
 def clean(value):
-    text = str(value or '').strip()
-    return '' if text.casefold() in PLACEHOLDERS else re.sub(r'[\x00-\x1f\x7f]', ' ', text)[:128]
+    text = re.sub(r'[\x00-\x1f\x7f]', ' ', str(value or '')).strip()
+    text = re.sub(r'\s+', ' ', text)
+    return '' if text.casefold() in PLACEHOLDERS else text[:128]
 
 
 def identity(*, vendor='', model='', description='', object_id=''):
     vendor, model = clean(vendor), clean(model)
     oid = str(object_id).strip().lstrip('.')
     product = PRODUCTS.get(oid)
+    configured = settings.snmp_identity.products.get(oid)
+    if configured:
+        product = (configured.vendor, configured.model)
     if product:
         vendor, model = vendor or product[0], model or product[1]
     if not vendor:
         enterprise = re.match(r'^1\.3\.6\.1\.4\.1\.(\d+)(?:\.|$)', oid)
-        vendor = ENTERPRISES.get(enterprise[1], '') if enterprise else ''
+        vendor = (settings.snmp_identity.enterprises.get(enterprise[1]) or ENTERPRISES.get(enterprise[1], '')) if enterprise else ''
     if not vendor:
         for pattern, name in [(r'\bcisco\b', 'Cisco'), (r'\bdell\b', 'Dell'),
                               (r'\bhewlett.packard\b|\bproliant\b|\bHPE\b', 'HPE'), (r'\bjuniper\b', 'Juniper'),
@@ -51,14 +56,19 @@ def identity(*, vendor='', model='', description='', object_id=''):
 
 
 def snmp_identity(values):
-    chassis = [oid[len(ENTITY + '5.'): ] for oid, value in values.items()
-               if oid.startswith(ENTITY + '5.') and str(value) == '3']
+    # Numeric OIDs may have a leading dot in tools and integration responses.
+    values = {str(oid).lstrip('.'): value for oid, value in values.items()}
+    classes = {oid[len(ENTITY + '5.'):]: str(value).strip().casefold() for oid, value in values.items() if oid.startswith(ENTITY + '5.')}
+    chassis = [index for index, value in classes.items() if value in {'3', 'chassis(3)', 'chassis'}]
+    stacks = [index for index, value in classes.items() if value in {'11', 'stack(11)', 'stack'}]
     models = [oid[len(ENTITY + '13.'): ] for oid in values if oid.startswith(ENTITY + '13.') and clean(values[oid])]
-    candidates = chassis or (models if len(models) == 1 else [])
-    index = next((index for index in candidates if clean(values.get(ENTITY + '13.' + index))
-                  or clean(values.get(ENTITY + '12.' + index))), None)
-    return identity(vendor=values.get(ENTITY + '12.' + index, '') if index else '',
-                    model=values.get(ENTITY + '13.' + index, '') if index else '',
+    # Never promote a known port, fan, or module into a chassis identity.
+    candidates = chassis or stacks or (models if not classes and len(models) == 1 else [])
+    def consensus(column):
+        reported = {clean(values.get(ENTITY + column + '.' + index)) for index in candidates}
+        reported.discard('')
+        return next(iter(reported)) if len(reported) == 1 else ''
+    return identity(vendor=consensus('12'), model=consensus('13'),
                     description=values.get('1.3.6.1.2.1.1.1.0', ''), object_id=values.get('1.3.6.1.2.1.1.2.0', ''))
 
 

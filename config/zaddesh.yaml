@@ -35,3 +35,9 @@ logging:
   level: "INFO"
   format: "json"
 
+# Optional exact OID/enterprise mappings; see docs/snmp-portability.md.
+# Standard ENTITY-MIB discovery works without adding vendor mappings.
+snmp_identity:
+  products: {}
+  enterprises: {}
+

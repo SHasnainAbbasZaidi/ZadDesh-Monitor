@@ -273,8 +273,20 @@ const TOPOLOGY_ROOTS: &[&str] = &[
 
 fn topology_value(value: Value<'_>) -> Option<String> {
     match value {
-        Value::OctetString(bytes) if bytes.iter().all(|byte| !byte.is_ascii_control()) => {
-            Some(String::from_utf8_lossy(bytes).chars().take(120).collect())
+        Value::OctetString(bytes)
+            if bytes
+                .iter()
+                .all(|byte| !byte.is_ascii_control() || byte.is_ascii_whitespace()) =>
+        {
+            Some(
+                String::from_utf8_lossy(bytes)
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .chars()
+                    .take(512)
+                    .collect(),
+            )
         }
         Value::OctetString(bytes) => Some(
             bytes
@@ -496,5 +508,28 @@ pub async fn probe_snmp(task: &CheckTask) -> ProbeResult {
         status,
         metrics,
         message: message.into(),
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn multiline_identity_stays_text_while_binary_stays_hex() {
+        assert_eq!(
+            topology_value(Value::OctetString(b"Unfamiliar Vendor\r\nModel Z-900")),
+            Some("Unfamiliar Vendor Model Z-900".into())
+        );
+        assert_eq!(
+            topology_value(Value::OctetString(&[0, 255, 16])),
+            Some("00:ff:10".into())
+        );
+        assert_eq!(
+            topology_value(Value::OctetString(&[b'x'; 600]))
+                .unwrap()
+                .len(),
+            512
+        );
     }
 }
