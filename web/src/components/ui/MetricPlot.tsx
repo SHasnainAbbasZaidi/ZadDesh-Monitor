@@ -14,7 +14,7 @@ function csvName(value: string) {
   return '"' + (/^[\s=+@-]/.test(value) ? "'" : '') + value.replace(/"/g, '""') + '"';
 }
 
-export default function MetricPlot({ title, unit, data, channels, range, failureBucketSeconds, color, height, intervalSeconds, annotations }: MetricChartProps) {
+export default function MetricPlot({ variant, title, unit, data, channels, range, failureBucketSeconds, color, height, intervalSeconds, annotations }: MetricChartProps) {
   const host = useRef<HTMLDivElement>(null);
   const chart = useRef<EChartsType | null>(null);
   const { theme } = useTheme();
@@ -65,16 +65,19 @@ export default function MetricPlot({ title, unit, data, channels, range, failure
       yAxis: [
         { type: 'value', splitNumber: 4, axisLabel: { ...axisLabel,
           formatter: (value: number) => new Intl.NumberFormat(undefined, { notation: 'compact', maximumSignificantDigits: 3 }).format(value) },
-          splitLine: { lineStyle: { color: line } }, scale: true },
+          splitLine: { lineStyle: { color: line } }, scale: variant !== 'glass', min: variant === 'glass' ? 0 : undefined },
         ...(hasOutages ? [{ type: 'value', gridIndex: 1, min: 0, max: 2, show: false }] : []),
       ],
       dataZoom: [{ type: 'inside', xAxisIndex: hasOutages ? [0, 1] : [0], zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: false }],
       series: [
         ...plots.map(plot => ({
           id: `latency-${plot.id}`, name: plot.name, type: 'line', data: plotPoints(plot.data, plot.intervalSeconds),
-          itemStyle: { color: plot.color }, lineStyle: { color: plot.color }, connectNulls: false,
-          showSymbol: plot.data.length < 12, sampling: 'lttb',
-          ...(channels ? {} : { areaStyle: { opacity: 0.08 } }),
+          itemStyle: { color: plot.color }, lineStyle: { color: plot.color, width: variant === 'glass' ? 1.5 : 2 }, connectNulls: false,
+          smooth: variant === 'glass' ? 0.3 : false, smoothMonotone: 'x',
+          showSymbol: variant !== 'glass' && plot.data.length < 12, sampling: 'lttb',
+          ...(variant === 'glass' ? { areaStyle: { opacity: 0.38, color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [{ offset: 0, color: plot.color }, { offset: 1, color: plot.color + '18' }] } } }
+            : channels ? {} : { areaStyle: { opacity: 0.08 } }),
           ...(markers ? { markLine: { symbol: 'none', label: { formatter: '{b}', color: ink }, data: markers } } : {}),
         })),
         ...(hasOutages ? [{
@@ -88,7 +91,7 @@ export default function MetricPlot({ title, unit, data, channels, range, failure
         }] : []),
       ],
     }, { replaceMerge: ['series', 'grid', 'xAxis', 'yAxis'] });
-  }, [title, unit, data, channels, range, failureBucketSeconds, color, theme, intervalSeconds, annotations]);
+  }, [variant, title, unit, data, channels, range, failureBucketSeconds, color, theme, intervalSeconds, annotations]);
 
   const download = (url: string, suffix: string) => {
     const link = document.createElement('a');

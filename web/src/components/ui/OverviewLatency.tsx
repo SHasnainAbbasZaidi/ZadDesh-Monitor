@@ -7,18 +7,20 @@ import { useTheme } from '../../context/ThemeContext';
 
 const protocols = { icmp: 'ICMP', http: 'HTTP(S)', tcp: 'TCP' };
 const palette = {
-  dark: ['#38bdf8', '#c084fc', '#fbbf24', '#34d399', '#fb7185', '#a5b4fc'],
-  light: ['#0369a1', '#7e22ce', '#a16207', '#047857', '#be123c', '#4338ca'],
+  dark: ['#56f99a', '#b68aff', '#50d5ef', '#ffc86a', '#f28cbb', '#8da8ff'],
+  light: ['#1bbb69', '#9560df', '#159fbf', '#c68820', '#d95493', '#536ed4'],
 };
 type Latency = Awaited<ReturnType<typeof api.getProbeLatency>>;
 
-export function OverviewLatency({ minutes, updatedAt }: { minutes: number; updatedAt?: number }) {
+export function OverviewLatency({ minutes }: { minutes: number; updatedAt?: number }) {
   const { theme } = useTheme();
   const [selection, setSelection] = useState('all');
+  const [windowMinutes, setWindowMinutes] = useState(5);
+  const rangeMinutes = windowMinutes === 0 ? minutes : Math.min(minutes, windowMinutes);
   const [protocol, setProtocol] = useState<keyof typeof protocols>('icmp');
   const [result, setResult] = useState<{ key: string; data: Latency }>();
   const [error, setError] = useState('');
-  const key = [selection, protocol, minutes].join('/');
+  const key = [selection, protocol, rangeMinutes].join('/');
   const current = result?.key === key ? result.data : undefined;
   const devices = result?.data.devices ?? [];
   const displayed = selection === 'all' ? devices : devices.filter(device => String(device.id) === selection);
@@ -28,18 +30,25 @@ export function OverviewLatency({ minutes, updatedAt }: { minutes: number; updat
     ? `${device.name} (${device.ip})` : device.name;
 
   useEffect(() => {
-    if (updatedAt === undefined) return;
     const controller = new AbortController();
-    api.getProbeLatency(protocol, minutes, selection, controller.signal, true).then(data => {
-      if (controller.signal.aborted) return;
-      setError('');
-      if (selection !== 'all' && !data.devices.some(device => String(device.id) === selection)) setSelection('all');
-      setResult({ key, data });
-    }).catch(() => {
-      if (!controller.signal.aborted) setError('Could not load probe telemetry. The next poll will retry.');
-    });
-    return () => controller.abort();
-  }, [key, minutes, protocol, selection, updatedAt]);
+    let timer: number | undefined;
+    async function load() {
+      try {
+        const data = await api.getProbeLatency(protocol, rangeMinutes, selection, controller.signal, true);
+        if (!controller.signal.aborted) {
+          setError('');
+          if (selection !== 'all' && !data.devices.some(device => String(device.id) === selection)) setSelection('all');
+          setResult({ key, data });
+        }
+      } catch {
+        if (!controller.signal.aborted) setError('Could not load probe telemetry. The next poll will retry.');
+      } finally {
+        if (!controller.signal.aborted) timer = window.setTimeout(load, 10000);
+      }
+    }
+    void load();
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, [key, rangeMinutes, protocol, selection]);
 
   const devicePositions = new Map(devices.map((device, index) => [device.id, { device, index }]));
   const channels = (current?.channels ?? []).flatMap(channel => {
@@ -48,7 +57,7 @@ export function OverviewLatency({ minutes, updatedAt }: { minutes: number; updat
     return [{
       id: channel.device_id,
       name: deviceLabel(position.device),
-      color: palette[theme][position.index] ?? `hsl(${(position.index * 137.508) % 360}, 65%, ${theme === 'dark' ? 65 : 34}%)`,
+      color: palette[theme][position.index] ?? palette[theme][position.index % palette[theme].length],
       data: [...channel.latency, ...channel.failures.map(timestamp => ({ timestamp, value: null }))],
       failures: channel.failures.map(timestamp => ({ timestamp, value: 0 })),
       intervalSeconds: channel.interval_seconds,
@@ -74,14 +83,26 @@ export function OverviewLatency({ minutes, updatedAt }: { minutes: number; updat
         </div>
       </header>
       <div className="dash-panel-body">
+        <div className="mb-2 flex items-center justify-between text-xs ops-muted">
+          <span>Layered latency · last {rangeMinutes} minutes</span>
+          <select className="dash-select" aria-label="Latency time window" value={windowMinutes} onChange={event => setWindowMinutes(Number(event.target.value))}>
+            <option value={5}>5 min</option><option value={15}>15 min</option><option value={0}>Dashboard range</option>
+          </select>
+        </div>
         {error && <p role="alert" className="mb-2 text-sm ops-muted">{error}</p>}
-        {reporting > 0 && current ? <MetricChart title={protocols[protocol] + ' latency'} unit="ms" channels={channels}
-          range={{ start: Date.parse(current.start), end: Date.parse(current.end) }} failureBucketSeconds={current.bucket_seconds} height={190} />
+        {reporting > 0 && current ? <MetricChart variant="glass" title={protocols[protocol] + ' latency'} unit="ms" channels={channels}
+          range={{ start: Date.parse(current.start), end: Date.parse(current.end) }} failureBucketSeconds={current.bucket_seconds} height={210} />
           : <div className="dash-chart-empty" role="status">
             <Activity size={25} />
             <strong>{error ? 'Telemetry unavailable' : !current ? 'Loading telemetry' : !devices.length ? 'No devices configured' : 'No samples in this range'}</strong>
             {current && !!devices.length && <span>Choose another protocol or time range, or wait for the next poll.</span>}
           </div>}
+        {channels.length > 0 && <div className="flex gap-3 overflow-x-auto py-2 text-xs" aria-label="Latency channels">
+          {channels.map(channel => <button type="button" className="flex shrink-0 items-center gap-1.5 ops-muted" key={channel.id}
+            onClick={() => setSelection(String(channel.id))} title={channel.name}>
+            <span aria-hidden="true" className="h-2 w-2 rounded-full" style={{ backgroundColor: channel.color }} />{channel.name}
+          </button>)}
+        </div>}
         {current && !!displayed.length && <footer className="dash-latency-footer">
           <span>{displayed.length} {displayed.length === 1 ? 'device' : 'devices'} · {reporting} reporting</span>
           {reporting > 0 && <span>Peak per {current.bucket_seconds}s</span>}

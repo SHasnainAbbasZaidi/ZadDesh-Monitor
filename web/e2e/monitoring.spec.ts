@@ -454,3 +454,43 @@ test('SNMP workstations stay quiet until priority is selected, with process/serv
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations.filter(item => ['critical', 'serious'].includes(item.impact ?? ''))).toEqual([]);
 });
+
+test('layered latency finishes loading during frequent live updates', async ({ page }) => {
+  const access = token || process.env.ZADDESH_E2E_TOKEN;
+  if (!access) throw new Error('Run after setup or supply the isolated browser token.');
+  await page.addInitScript(value => {
+    localStorage.setItem('zaddesh_token', value);
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      if (String(input).endsWith('/api/v1/stream')) {
+        let timer: number;
+        const stream = new ReadableStream({
+          start(controller) {
+            const encoder = new TextEncoder();
+            controller.enqueue(encoder.encode('event: ready\ndata: {}\n\n'));
+            timer = window.setInterval(() => controller.enqueue(encoder.encode('event: change\ndata: {}\n\n')), 2100);
+            init?.signal?.addEventListener('abort', () => window.clearInterval(timer));
+          },
+          cancel() { window.clearInterval(timer); },
+        });
+        return Promise.resolve(new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } }));
+      }
+      return original(input, init);
+    };
+  }, access);
+  await page.route('**/api/v1/metrics/probe-latency?**', async route => {
+    const end = Date.now();
+    await new Promise(resolve => setTimeout(resolve, 3500));
+    await route.fulfill({ json: {
+      devices: [{ id: 900, name: 'Latency validation fixture', ip: '192.0.2.90', status: 'up' }],
+      channels: [{ device_id: 900, check_name: 'Validation ICMP', interval_seconds: 30, probe_down: false,
+        latency: Array.from({ length: 5 }, (_, index) => ({ timestamp: new Date(end - (4 - index) * 30000).toISOString(), value: index + 1 })), failures: [] }],
+      start: new Date(end - 300000).toISOString(), end: new Date(end).toISOString(), bucket_seconds: 15,
+    } }).catch(() => {});
+  });
+  await page.goto('/');
+  const panel = page.locator('.dash-latency');
+  await expect(panel.locator('canvas')).toBeVisible({ timeout: 15000 });
+  await expect(panel.getByLabel('Latency time window')).toHaveValue('5');
+  await expect(panel.getByRole('button', { name: 'Latency validation fixture', exact: true })).toBeVisible();
+});

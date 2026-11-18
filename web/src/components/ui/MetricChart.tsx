@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 
 export interface MetricChartProps {
   title: string;
+  variant?: 'standard' | 'glass';
   unit: string;
   data?: MetricPoint[];
   channels?: MetricChannel[];
