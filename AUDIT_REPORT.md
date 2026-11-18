@@ -327,3 +327,91 @@ The rollout is usable but **not production-qualified**. Remaining priorities: re
 Local live screenshots: `.audit/ui-polish/live-overview-mongo.png`, `live-discovered-mongo.png`, `live-snmp-snapshot.png`, `live-integrated-logs.png`. Fixture screenshots: `workstation-light.png` and `workstation-dark.png` in the same directory. Sanitized test/API reports are in `.audit/local-run/`; protected migration reports/settings are in `.audit/mongodb-native/`. The local restart helper is `.audit/local-run/start-current-stack.py`.
 
 Changes cover core native persistence/query compilation, models/migrations, priority filtering, workstation APIs, integrated logging, collector SNMP jobs, client scripts, Devices/Logs/Overview UI, regression tests, launchers, migration tooling, CI and README. Git commits below record the complete changed-file lists.
+
+Versioned implementation commits:
+
+- `606b1cd docs: record MongoDB migration and workstation validation limits`
+- `d45fd36 feat(ui): add SNMP discovery view, priority controls and separated logs`
+- `9ea0603 feat(collector): collect on-demand SNMP process and service snapshots`
+- `c85726e feat(core): add native MongoDB and priority SNMP workstation inventory`
+
+Changed files for this rollout:
+
+- `.github/workflows/ci.yml`
+- `AUDIT_REPORT.md`
+- `README.md`
+- `collector/src/main.rs`
+- `collector/src/probes/snmp.rs`
+- `collector/src/topology.rs`
+- `config/zaddesh.yaml`
+- `core/alembic/versions/0016_device_priority.py`
+- `core/alembic/versions/0017_workstation_inventory.py`
+- `core/alembic/versions/0018_client_issue_logs.py`
+- `core/tests/conftest.py`
+- `core/tests/test_email_alerts.py`
+- `core/tests/test_incident_workspace.py`
+- `core/tests/test_metrics.py`
+- `core/tests/test_mongo_store.py`
+- `core/tests/test_network_diagram.py`
+- `core/tests/test_zabbix.py`
+- `core/zaddesh_core/api/v1/__init__.py`
+- `core/zaddesh_core/api/v1/alerts.py`
+- `core/zaddesh_core/api/v1/collectors.py`
+- `core/zaddesh_core/api/v1/devices.py`
+- `core/zaddesh_core/api/v1/email_alerts.py`
+- `core/zaddesh_core/api/v1/incidents.py`
+- `core/zaddesh_core/api/v1/infrastructure_monitoring.py`
+- `core/zaddesh_core/api/v1/logs.py`
+- `core/zaddesh_core/api/v1/metrics.py`
+- `core/zaddesh_core/api/v1/network_diagram.py`
+- `core/zaddesh_core/api/v1/system.py`
+- `core/zaddesh_core/api/v1/workstations.py`
+- `core/zaddesh_core/api/v1/zabbix.py`
+- `core/zaddesh_core/config.py`
+- `core/zaddesh_core/database.py`
+- `core/zaddesh_core/email_worker.py`
+- `core/zaddesh_core/incident_delivery.py`
+- `core/zaddesh_core/incidents.py`
+- `core/zaddesh_core/integration_logs.py`
+- `core/zaddesh_core/main.py`
+- `core/zaddesh_core/models/__init__.py`
+- `core/zaddesh_core/models/alerts.py`
+- `core/zaddesh_core/models/infrastructure.py`
+- `core/zaddesh_core/models/workstations.py`
+- `core/zaddesh_core/mongo_queries.py`
+- `core/zaddesh_core/mongo_store.py`
+- `core/zaddesh_core/schemas/device.py`
+- `core/zaddesh_core/seed.py`
+- `core/zaddesh_core/storage_init.py`
+- `core/zaddesh_core/topology.py`
+- `core/zaddesh_core/workstation_logs.py`
+- `scripts/audit/browser.py`
+- `scripts/dev.ps1`
+- `scripts/dev.sh`
+- `scripts/dev_stack.py`
+- `scripts/migrate_to_mongodb.py`
+- `web/e2e/monitoring.spec.ts`
+- `web/e2e/zabbix.spec.ts`
+- `web/src/App.tsx`
+- `web/src/agents/enable-services-linux.sh`
+- `web/src/agents/enable-services-windows.ps1`
+- `web/src/agents/events-linux.py`
+- `web/src/agents/events-windows.ps1`
+- `web/src/agents/includeEventLogInstaller.test.ts`
+- `web/src/agents/includeEventLogInstaller.ts`
+- `web/src/agents/setup-linux-snmp.sh`
+- `web/src/agents/setup-windows-snmp.ps1`
+- `web/src/components/layout/Sidebar.tsx`
+- `web/src/components/ui/InfrastructureMonitoring.tsx`
+- `web/src/components/ui/OverviewLatency.tsx`
+- `web/src/components/ui/OverviewSummary.tsx`
+- `web/src/components/ui/SnmpCheckForm.tsx`
+- `web/src/components/ui/WorkstationInventory.tsx`
+- `web/src/components/ui/formatMetricValue.ts`
+- `web/src/pages/Devices.tsx`
+- `web/src/pages/Logs.tsx`
+- `web/src/pages/Overview.tsx`
+- `web/src/services/api.ts`
+- `web/src/types/index.ts`
+
+Final legacy regression: 86 passed, 15 skipped (14 native tests executed separately; one pre-existing skip). Native suite: 14 passed.
