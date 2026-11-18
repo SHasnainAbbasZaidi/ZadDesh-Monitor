@@ -62,12 +62,16 @@ export default function NetworkDiagram() {
   useEffect(() => {
     const controller = new AbortController();
     void Promise.all([request<DiagramItem[]>('/network-diagram', { signal: controller.signal }),
-      api.getChecks({ check_type: 'snmp', is_enabled: true })])
+      request<Check[]>('/network-diagram/seeds', { signal: controller.signal })])
       .then(([items, candidates]) => {
         if (controller.signal.aborted) return;
         setDiagrams(items);
         setId(current => choseDiagram.current ? current : items[0]?.id);
-        setChecks(candidates.filter(check => !check.params.credential));
+        const seeds = new Map<number, Check>();
+        for (const check of candidates) {
+          if (!seeds.has(check.device_id)) seeds.set(check.device_id, check);
+        }
+        setChecks([...seeds.values()]);
       }).catch(failure => { if (!controller.signal.aborted) setError(failure.message); });
     return () => controller.abort();
   }, [refresh]);

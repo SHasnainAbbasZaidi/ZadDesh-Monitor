@@ -12,9 +12,19 @@ export function useAddonUpdates(refresh: () => void, paused = false) {
     let stopped = false;
     let retry = 1000;
     let timer: number;
+    let refreshTimer: number | undefined;
+    let lastRefresh = Date.now();
+    function scheduleRefresh() {
+      if (refreshTimer !== undefined || stopped) return;
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = undefined;
+        lastRefresh = Date.now();
+        callback.current();
+      }, Math.max(0, 10000 - (Date.now() - lastRefresh)));
+    }
     function connect() {
       socket = new WebSocket(url, ['zaddesh-v1', token!]);
-      socket.onmessage = () => { retry = 1000; callback.current(); };
+      socket.onmessage = () => { retry = 1000; scheduleRefresh(); };
       socket.onclose = () => {
         if (!stopped) {
           timer = window.setTimeout(connect, retry);
@@ -23,10 +33,11 @@ export function useAddonUpdates(refresh: () => void, paused = false) {
       };
     }
     connect();
-    const poll = window.setInterval(() => callback.current(), 15000);
+    const poll = window.setInterval(scheduleRefresh, 15000);
     return () => {
       stopped = true;
       window.clearTimeout(timer);
+      window.clearTimeout(refreshTimer);
       window.clearInterval(poll);
       socket.close();
     };

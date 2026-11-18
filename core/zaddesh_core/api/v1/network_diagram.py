@@ -73,6 +73,15 @@ def diagram(db, identifier, published=False):
     return item
 
 
+@router.get("/seeds")
+def discovery_seeds(db: Session = Depends(get_db)):
+    identifiers = [identifier for identifier, in db.query(func.min(Check.id)).filter(
+        Check.check_type == "snmp", Check.is_enabled.is_(True)).group_by(Check.device_id)]
+    return [{"id": check.id, "device_id": check.device_id, "name": check.name, "target": check.target,
+             "check_type": "snmp", "params": {key: check.params[key] for key in ("version", "security_level") if key in check.params}}
+            for check in db.query(Check).filter(Check.id.in_(identifiers)).order_by(Check.id)]
+
+
 @router.get("")
 def diagrams(db: Session = Depends(get_db)):
     return [{"id": item.id, "name": item.name, "published": item.published,

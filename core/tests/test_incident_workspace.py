@@ -171,3 +171,23 @@ def test_critical_categories_and_alert_cleanup(client, db_session, admin_headers
     down.triggered_at = now
     db_session.commit()
     assert ids("current", "&category=critical") == critical
+
+def test_snmp_scalar_failures_are_not_host_offline(client, admin_headers, db_session, monkeypatch):
+    from zaddesh_core.models.zabbix import ZabbixHostImport
+    monkeypatch.setattr(settings.features, 'incident_workspace', True)
+    device = Device(name='Counter target', ip='192.0.2.71', is_priority=True, status='down', collection_mode='scheduled')
+    db_session.add(device)
+    db_session.flush()
+    check = Check(name='Interface counter', device_id=device.id, check_type='snmp', target=device.ip, params={'oid': '1.3.6.1.2.1.2.2.1.10.1'})
+    db_session.add(check)
+    db_session.flush()
+    db_session.add(Alert(device_id=device.id, check_id=check.id, title='Availability: Interface counter', severity='critical'))
+    db_session.commit()
+    path='/api/v1/incidents/alerts?category=critical&view=current&include_count=true'
+    assert client.get(path, headers=admin_headers).json()['total'] == 0
+    check.check_type='icmp'
+    db_session.commit()
+    assert client.get(path, headers=admin_headers).json()['total'] == 1
+    db_session.add(ZabbixHostImport(source_key='validation', host_id='1', device_id=device.id))
+    db_session.commit()
+    assert client.get(path, headers=admin_headers).json()['total'] == 0

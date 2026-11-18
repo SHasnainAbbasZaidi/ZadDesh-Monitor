@@ -498,3 +498,20 @@ def test_native_concurrent_ingestion_is_retryable_and_deduplicated(mongo_api):
     assert any(response.status_code == 202 for response in responses)
     assert send().status_code == 202
     assert mongo_database().metrics_raw.count_documents({'device_id': identifier}) == 1
+
+def test_imported_availability_noise_is_hidden_but_resource_alerts_remain(mongo_api):
+    from zaddesh_core.models import Alert
+    from zaddesh_core.models.zabbix import ZabbixHostImport
+    client, headers = mongo_api
+    with MongoSession() as db:
+        device=Device(name='Imported priority host', ip='192.0.2.94', is_priority=True, status='down')
+        db.add(device)
+        db.flush()
+        db.add(ZabbixHostImport(source_key='validation', host_id='94', device_id=device.id))
+        db.add(Alert(device_id=device.id, title='Availability: SNMP counter', severity='critical'))
+        db.add(Alert(device_id=device.id, title='High CPU utilization', severity='critical'))
+        db.commit()
+    result=client.get('/api/v1/incidents/alerts?category=critical&view=current&include_count=true', headers=headers)
+    assert result.status_code == 200, result.text
+    assert result.json()['total'] == 1
+    assert result.json()['alerts'][0]['category'] == 'cpu_usage'

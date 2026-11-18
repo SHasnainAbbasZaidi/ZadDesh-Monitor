@@ -25,7 +25,7 @@ from zaddesh_core.models.incidents import Incident, IncidentDelivery, IncidentFi
 from zaddesh_core.models.infrastructure import Collector, Device, Site
 from zaddesh_core.models.metrics import MetricRaw
 from zaddesh_core.models.topology import TopologyLink, TopologyNode
-from zaddesh_core.models.zabbix import ZabbixAlertDismissal, ZabbixConnection
+from zaddesh_core.models.zabbix import ZabbixAlertDismissal, ZabbixConnection, ZabbixHostImport
 
 
 def enabled() -> None:
@@ -95,7 +95,8 @@ def alert_category():
     link = and_(contains(title, LINK_DOWN_TERMS), or_(contains(title, TEN_GIG_TERMS), contains(context, SERVER_TERMS), topology_link))
     offline = or_(Alert.title.ilike("device offline%"), Alert.title.ilike("device down%"),
                   and_(Alert.rule_id.is_(None), Alert.title.startswith("Availability: "),
-                       Check.check_type.in_(("icmp", "snmp")), Device.status == "down"))
+                       or_(Check.check_type == "icmp", and_(Check.check_type == "snmp", or_(Device.collection_mode == "on_demand",
+                           func.coalesce(Check.params["oid"].as_string(), "1.3.6.1.2.1.1.3.0") == "1.3.6.1.2.1.1.3.0"))), Device.status == "down"))
     resources = [(and_(contains(title, subjects), contains(title, triggers)), category)
                  for category, subjects, triggers in RESOURCE_CATEGORIES]
     return case((offline, "device_offline"), (link, "link_down"), *resources, else_="other")
@@ -132,9 +133,14 @@ def alert_summary(alert, incident, device, check, site, category):
 
 
 def joined_alerts(db: Session):
+    # Zabbix is authoritative for imported-host availability; keep native
+    # scalar failures in device history without duplicating host incidents.
+    imported = [identifier for identifier, in db.query(ZabbixHostImport.device_id).distinct()]
+    native_visibility = or_(Alert.device_id.notin_(imported), Alert.rule_id.is_not(None),
+                            Alert.title.notlike("Availability: %")) if imported else True
     return (db.query(Alert, Incident, Device, Check, Site, alert_category()).join(Device, Alert.device_id == Device.id)
             .outerjoin(Incident, Incident.alert_id == Alert.id).outerjoin(Check, Check.id == Alert.check_id)
-            .outerjoin(Site, Site.id == Device.site_id).filter(Device.is_priority.is_(True)))
+            .outerjoin(Site, Site.id == Device.site_id).filter(Device.is_priority.is_(True), native_visibility))
 
 
 @router.get("/alerts")

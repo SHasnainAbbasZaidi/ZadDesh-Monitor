@@ -84,7 +84,8 @@ def record_availability(
         db.add(Event(device_id=device.id, check_id=check.id, event_type="state_change",
                      severity="info" if ok else "critical", title=f"Availability: {check.name}",
                      message="Probe passed" if ok else "Probe failed", timestamp=timestamp))
-    if not device.is_priority:
+    if not device.is_priority or (check.check_type == "snmp" and device.collection_mode != "on_demand"
+            and check.params.get("oid", "1.3.6.1.2.1.1.3.0").lstrip(".") != "1.3.6.1.2.1.1.3.0"):
         return
     if alert is None:
         if ok and previous != "critical":

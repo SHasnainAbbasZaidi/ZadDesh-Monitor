@@ -415,3 +415,13 @@ Changed files for this rollout:
 - `web/src/types/index.ts`
 
 Final legacy regression: 86 passed, 15 skipped (14 native tests executed separately; one pre-existing skip). Native suite: 14 passed.
+
+## 2026-11-18: Critical-alert inflation and diagram refresh regression
+
+Reproduced 1,045 critical incidents: SNMP interface counter failures were classified as device-offline merely because the local device status was down. Imported hosts now use the Zabbix incident feed for availability, avoiding duplicate local probe incidents. Scheduled scalar/OID failures remain telemetry/log events rather than host-outage alerts. Default sysUpTime reachability and on-demand SNMP snapshots retain outage handling; resource and uplink classifications remain available. Historical records were not deleted.
+
+Reproduced diagram dependencies: graph reads returned 200, but fetching 1,000 SNMP checks took 9.4 seconds. Frequent metric-driven WebSocket invalidations restarted requests. Added a credential-free discovery-seed endpoint returning one check per device, replaced the full-check download, and coalesced live refresh notifications to at most one per ten seconds.
+
+Live verification: native critical count decreased from 1,045 to zero false incidents; the separately sourced Zabbix feed remains authoritative. All three diagram graph endpoints returned 200. Chrome rendered 49 SVG groups, still present after twelve seconds of live updates. Screenshot: `.audit/ui-polish/diagram-regression-fixed.png`.
+
+Validation: 17 incident/topology tests passed; the real MongoDB imported-host filtering regression passed and confirmed genuine CPU incidents remain visible. TypeScript, ESLint, production build, Ruff and mypy passed. The broader native suite was attempted but failed while importing `scripts/migrate_to_mongodb.py`: unexpected non-source content caused a SyntaxError. This maintenance-tool failure remains open and is not a full-suite pass; do not run another database migration until that source/integrity issue is repaired. It does not participate in serving the live dashboard.
