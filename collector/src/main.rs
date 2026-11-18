@@ -51,9 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let heartbeat_handle = tokio::spawn(heartbeat(config.clone()));
-    let topology_handle = config
-        .network_diagram_beta
-        .then(|| tokio::spawn(topology::run(config.clone())));
+    let topology_handle = tokio::spawn(topology::run(config.clone()));
 
     // Initialize offline disk buffer
     let disk_buffer = DiskBuffer::open(config.buffer_dir.clone(), config.batch_size)?;
@@ -76,9 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     shutdown_signal().await?;
     info!("Received shutdown signal. Stopping collector engine...");
     heartbeat_handle.abort();
-    if let Some(handle) = topology_handle {
-        handle.abort();
-    }
+    topology_handle.abort();
     scheduler_handle.abort();
     let _ = scheduler_handle.await;
     sender_handle.await?;

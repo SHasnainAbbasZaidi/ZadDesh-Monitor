@@ -306,10 +306,39 @@ pub async fn discover_topology(
     {
         return Err("Discovery requires authenticated SNMPv3");
     }
+    walk_roots(task, TOPOLOGY_ROOTS, false).await
+}
+
+pub async fn discover_workstation(
+    task: &CheckTask,
+) -> Result<BTreeMap<String, String>, &'static str> {
+    const ROOTS: &[&str] = &[
+        "1.3.6.1.2.1.1",
+        "1.3.6.1.2.1.25.4.2.1.2", // Running software names
+        "1.3.6.1.2.1.25.4.2.1.4", // Executable paths, excluding command arguments
+        "1.3.6.1.2.1.25.4.2.1.6", // Software type
+        "1.3.6.1.2.1.25.4.2.1.7", // Software state
+        "1.3.6.1.4.1.8072.1.3.2.4.1.2.16.122.97.100.100.101.115.104.95.115.101.114.118.105.99.101.115",
+        "1.3.6.1.4.1.8072.1.3.2.4.1.2.14.122.97.100.100.101.115.104.95.101.118.101.110.116.115",
+        "1.3.6.1.2.1.25.3.3.1.2", // Processor load
+        "1.3.6.1.2.1.25.2.3.1", // Storage and memory
+    ];
+    walk_roots(task, ROOTS, true).await
+}
+
+async fn walk_roots(
+    task: &CheckTask,
+    roots: &[&str],
+    workstation: bool,
+) -> Result<BTreeMap<String, String>, &'static str> {
+    let v2c = param(task, "version", "3") == "2c";
+    let v1 = param(task, "version", "3") == "1";
     let mut session = tokio::time::timeout(Duration::from_secs(5), open_session(task))
         .await
         .map_err(|_| {
-            if v2c {
+            if v1 {
+                "SNMPv1 session timed out"
+            } else if v2c {
                 "SNMPv2c session timed out"
             } else {
                 "SNMPv3 session timed out"
@@ -317,7 +346,7 @@ pub async fn discover_topology(
         })??;
     let mut values = BTreeMap::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(55);
-    for root in TOPOLOGY_ROOTS {
+    for root in roots {
         if tokio::time::Instant::now() >= deadline || values.len() >= 8000 {
             break;
         }
@@ -325,9 +354,12 @@ pub async fn discover_topology(
         let mut current = oid(root)?;
         let mut count = 0;
         while count < 512 && values.len() < 8000 && tokio::time::Instant::now() < deadline {
-            let reply =
+            let reply = if v1 {
+                tokio::time::timeout(Duration::from_secs(2), session.getnext(&current)).await
+            } else {
                 tokio::time::timeout(Duration::from_secs(2), session.getbulk(&[&current], 0, 20))
-                    .await;
+                    .await
+            };
             let pdu = match reply {
                 Ok(Ok(pdu)) if pdu.error_status == 0 => pdu,
                 Ok(Err(snmp2::Error::AuthUpdated)) if count == 0 => {
@@ -335,7 +367,9 @@ pub async fn discover_topology(
                     continue;
                 }
                 _ if values.is_empty() => {
-                    return Err(if v2c {
+                    return Err(if v1 {
+                        "SNMPv1 community rejected or system MIB did not respond"
+                    } else if v2c {
                         "SNMPv2c community rejected or system MIB did not respond"
                     } else {
                         "SNMPv3 authentication failed or system MIB did not respond"
@@ -356,7 +390,18 @@ pub async fn discover_topology(
                     done = true;
                     break;
                 }
-                let decoded = if matches!(
+                let decoded = if workstation {
+                    match value {
+                        Value::OctetString(bytes) => Some(
+                            String::from_utf8_lossy(bytes)
+                                .chars()
+                                .filter(|value| !value.is_control() || *value == '\t')
+                                .take(1024)
+                                .collect(),
+                        ),
+                        _ => topology_value(value),
+                    }
+                } else if matches!(
                     *root,
                     "1.3.6.1.2.1.17.7.1.4.3.1.2" | "1.3.6.1.2.1.17.7.1.4.3.1.4"
                 ) {
@@ -388,7 +433,9 @@ pub async fn discover_topology(
         }
     }
     if values.is_empty() {
-        Err(if v2c {
+        Err(if v1 {
+            "SNMPv1 agent returned no readable system data"
+        } else if v2c {
             "SNMPv2c agent returned no readable system data"
         } else {
             "SNMPv3 agent returned no readable system data"
