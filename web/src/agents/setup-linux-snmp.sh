@@ -36,7 +36,7 @@ getent passwd Debian-snmp >/dev/null || fail 'The Debian-snmp service account is
 
 rollback() {
     systemctl disable --now "$service" >/dev/null 2>&1 || true
-    rm -f -- "$unit" "$config_dir/agent.conf" "$state_dir"/snmpd*.conf
+    rm -f -- "$unit" "$config_dir/agent.conf" "$config_dir/services.sh" "$config_dir/events.py" "$state_dir"/snmpd*.conf
     rmdir -- "$state_dir/cert_indexes" 2>/dev/null || true
     rmdir -- "$config_dir" "$state_dir" 2>/dev/null || true
     systemctl daemon-reload >/dev/null 2>&1 || true
@@ -45,7 +45,18 @@ trap rollback EXIT
 trap 'exit 1' HUP INT TERM
 install -d -m 0755 "$config_dir"
 install -d -m 0700 -o Debian-snmp -g Debian-snmp "$state_dir"
-printf 'agentAddress udp:%s:%s\nrouser zaddesh priv\n' "$listen_ip" "$agent_port" > "$config_dir/agent.conf"
+cat > "$config_dir/services.sh" <<'SERVICES'
+#!/bin/sh
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl list-units --type=service --all --no-pager --no-legend --plain 2>/dev/null |
+        awk 'NF >= 4 { printf "%s\t%s\n", $1, $4 }'
+elif command -v rc-status >/dev/null 2>&1; then
+    rc-status --all --nocolor 2>/dev/null | awk '/\[/ {gsub(/\[|\]/, ""); printf "%s\t%s\n", $1, $2}'
+fi
+SERVICES
+chmod 0755 "$config_dir/services.sh"
+# ZADDESH EVENT LOG INSTALL
+printf 'agentAddress udp:%s:%s\nrouser zaddesh priv\nextend zaddesh_services /bin/sh %s/services.sh\n' "$listen_ip" "$agent_port" "$config_dir" > "$config_dir/agent.conf"
 chmod 0644 "$config_dir/agent.conf"
 printf 'createUser zaddesh SHA "%s" AES "%s"\n' "$auth" "$privacy" > "$state_dir/snmpd.conf"
 chown Debian-snmp:Debian-snmp "$state_dir/snmpd.conf"

@@ -157,10 +157,11 @@ export const AppContent: React.FC = () => {
       )}
       {tab === 'overview' && features?.network_diagram_beta && <Suspense><NetworkDiagramWidget /></Suspense>}
       {tab === 'network-diagram' && admin && features?.network_diagram_beta && <Suspense><NetworkDiagram /></Suspense>}
-      {tab === 'devices' && <Devices searchQuery={searchQuery} />}
+      {tab === 'devices' && <Devices key="devices" searchQuery={searchQuery} />}
+      {tab === 'discovered' && admin && <Devices key="discovered" discoveredOnly />}
       {tab === 'checks' && <Checks />}
       {tab === 'alerts' && (incidentWorkspace ? <IncidentWorkspace /> : <Alerts />)}
-      {tab === 'logs' && (incidentWorkspace ? <IncidentWorkspace initialTab="logs" /> : <Logs />)}
+      {tab === 'logs' && <Logs />}
       {tab === 'settings' && admin && <Settings emailSelected={emailSettings} onSelectEmail={setEmailSettings} />}
     </AppLayout>
   );

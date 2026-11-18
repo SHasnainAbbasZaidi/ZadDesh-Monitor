@@ -30,7 +30,7 @@ export function OverviewLatency({ minutes, updatedAt }: { minutes: number; updat
   useEffect(() => {
     if (updatedAt === undefined) return;
     const controller = new AbortController();
-    api.getProbeLatency(protocol, minutes, selection, controller.signal).then(data => {
+    api.getProbeLatency(protocol, minutes, selection, controller.signal, true).then(data => {
       if (controller.signal.aborted) return;
       setError('');
       if (selection !== 'all' && !data.devices.some(device => String(device.id) === selection)) setSelection('all');
@@ -65,7 +65,7 @@ export function OverviewLatency({ minutes, updatedAt }: { minutes: number; updat
         <div><h2 id="latency-heading"><Activity size={16} aria-hidden="true" /> Probe latency</h2></div>
         <div className="dash-latency-selects">
           <select aria-label="Latency device" className="dash-select" value={selection} onChange={event => setSelection(event.target.value)}>
-            <option value="all">All Devices</option>
+            <option value="all">All priority devices</option>
             {devices.map(device => <option key={device.id} value={device.id}>{deviceLabel(device)}</option>)}
           </select>
           <select aria-label="Latency protocol" className="dash-select" value={protocol} onChange={event => setProtocol(event.target.value as keyof typeof protocols)}>

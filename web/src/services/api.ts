@@ -9,6 +9,9 @@ export interface InfrastructureLog {
   source: string;
   severity: typeof logSeverities[number];
   message: string;
+  origin?: 'zaddesh' | 'integration';
+  provider?: string;
+  device_id?: number;
 }
 
 export async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -55,10 +58,13 @@ export async function request<T>(endpoint: string, options: RequestInit = {}): P
 }
 
 export const api = {
-  getLogs: (filters: { source: string; severity: string }, signal: AbortSignal) => {
+  getLogs: (filters: { source?: string; severity?: string; origin?: string; provider?: string; device_id?: number }, signal: AbortSignal) => {
     const query = new URLSearchParams();
     if (filters.source) query.set('source', filters.source);
     if (filters.severity) query.set('severity', filters.severity);
+    if (filters.origin) query.set('origin', filters.origin);
+    if (filters.provider) query.set('provider', filters.provider);
+    if (filters.device_id) query.set('device_id', String(filters.device_id));
     return request<InfrastructureLog[]>(`/logs?${query}`, { signal });
   },
   // Auth
@@ -80,19 +86,28 @@ export const api = {
 
   // Devices & Infrastructure
   getDeviceStats: () => request<DeviceStats>('/devices/stats'),
-  getDevices: (params?: { query?: string; status?: string; site_id?: number }) => {
+  getDevices: async (params?: { query?: string; status?: string; site_id?: number; snmp_only?: boolean }) => {
     const q = new URLSearchParams();
     if (params?.query) q.set('query', params.query);
+    if (params?.snmp_only) q.set('snmp_only', 'true');
     if (params?.status) q.set('status', params.status);
     if (params?.site_id) q.set('site_id', params.site_id.toString());
-    const queryStr = q.toString() ? `?${q.toString()}` : '';
-    return request<Device[]>(`/devices${queryStr}`);
+    q.set('limit', '1000');
+    const devices: Device[] = [];
+    let page: Device[];
+    do {
+      q.set('offset', String(devices.length));
+      page = await request<Device[]>(`/devices?${q}`);
+      devices.push(...page);
+    } while (page.length === 1000);
+    return devices;
   },
   getDevice: (id: number) => request<Device & { site?: Site; group?: Group }>(`/devices/${id}`),
   createDevice: (data: any) => request<Device>('/devices', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
+  updateDeviceMonitoring: (id: number, changes: Partial<Pick<Device, 'is_priority' | 'collection_mode'>>) => request<Device>(`/devices/${id}`, { method: 'PUT', body: JSON.stringify(changes) }),
   deleteDevice: (id: number) => request<void>(`/devices/${id}`, { method: 'DELETE' }),
   deleteDevices: (device_ids: number[], zabbix_host_ids: string[]) => request<{ deleted: number; zabbix_hidden: number }>(
     '/devices/bulk-delete', { method: 'POST', body: JSON.stringify({ device_ids, zabbix_host_ids }) }),
@@ -123,9 +138,10 @@ export const api = {
 
   // Metrics
   getLatestMetrics: (deviceId: number) => request<{ metric_key: string; value: number; tags?: Record<string, string> }[]>(`/metrics/latest?device_id=${deviceId}`),
-  getProbeLatency: (protocol: string, minutes: number, deviceId: string, signal: AbortSignal) => {
+  getProbeLatency: (protocol: string, minutes: number, deviceId: string, signal: AbortSignal, priorityOnly = false) => {
     const query = new URLSearchParams({ protocol, minutes: String(minutes) });
     if (deviceId !== 'all') query.set('device_id', deviceId);
+    if (priorityOnly) query.set('priority_only', 'true');
     return request<{
       devices: Array<{ id: number; name: string; ip: string; status: string }>;
       channels: Array<{

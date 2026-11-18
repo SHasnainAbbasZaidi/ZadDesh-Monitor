@@ -62,7 +62,7 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
     let timer: number | undefined;
     async function loadFleet() {
       try {
-        const result = await request<FleetOverview>('/zabbix/fleet', { signal: controller.signal });
+        const result = await request<FleetOverview>('/zabbix/fleet?priority_only=true', { signal: controller.signal });
         if (!controller.signal.aborted) {
           setFleet(previous => result.zabbix_unavailable && previous && !previous.zabbix_unavailable
             ? previous : result);

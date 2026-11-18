@@ -44,7 +44,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Could not restrict the Net-SNMP configuration directory.' }
 
     $config = $directory.Replace('\', '/')
-    @('[snmp]', "persistentDir `"$config`"", '[snmpd]', "agentAddress udp:0.0.0.0:$agentPort", 'rouser zaddesh priv') |
+    'Get-Service | Sort-Object Name | ForEach-Object { "{0}`t{1}" -f $_.Name, $_.Status }' |
+        Set-Content -LiteralPath (Join-Path $directory 'services.ps1') -Encoding ASCII
+# ZADDESH EVENT LOG INSTALL
+    $services = 'extend zaddesh_services powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $config + '/services.ps1"'
+    @('[snmp]', "persistentDir `"$config`"", '[snmpd]', "agentAddress udp:0.0.0.0:$agentPort", 'rouser zaddesh priv', $services, $eventsExtension) |
         Set-Content -LiteralPath (Join-Path $directory 'agent.conf') -Encoding ASCII
     ('createUser zaddesh SHA "' + $agentAuth + '" AES "' + $agentPrivacy + '"') |
         Set-Content -LiteralPath (Join-Path $directory 'snmpd.conf') -Encoding ASCII

@@ -10,12 +10,12 @@ test('Zabbix settings and read-only device view', async ({ page, request }) => {
   expect(setup.status()).toBe(201);
   const auth = { Authorization: `Bearer ${(await setup.json()).access_token}` };
   const localResponse = await request.post('/api/v1/devices', { headers: auth, data: {
-    name: 'Local validation switch', ip: '192.0.2.10', initial_check_types: ['icmp'],
+    name: 'Local validation switch', ip: '192.0.2.10', initial_check_types: ['icmp'], is_priority: true,
   } });
   expect(localResponse.status()).toBe(201);
   const local = await localResponse.json();
   expect((await request.post('/api/v1/devices', { headers: auth, data: {
-    name: 'Local-only switch', ip: '192.0.2.11', initial_check_types: ['icmp'],
+    name: 'Local-only switch', ip: '192.0.2.11', initial_check_types: ['icmp'], is_priority: true,
   } })).status()).toBe(201);
   const url = 'http://zabbix.example.test/api_jsonrpc.php';
   let saved = false;
@@ -66,7 +66,7 @@ test('Zabbix settings and read-only device view', async ({ page, request }) => {
   await page.getByLabel('Username').fill('zabbix-admin');
   await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
-  await expect(page.getByRole('button', { name: /Total devices/ })).toContainText('3');
+  await expect(page.getByRole('button', { name: /Priority devices/ })).toContainText('3');
   await page.getByRole('button', { name: 'Devices', exact: true }).click();
   await expect(page.getByRole('row').filter({ hasText: 'Zabbix-only switch' })).toContainText('Agent reporting');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();

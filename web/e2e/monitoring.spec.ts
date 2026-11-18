@@ -50,6 +50,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 768, height: 1024 
     const name = `Loopback HTTP ${viewport.width}`;
     await page.getByLabel('Device Name').fill(name);
     await page.getByLabel('IP Address').fill('127.0.0.1');
+    await page.getByLabel('Priority alerts', { exact: true }).check();
     await page.getByText('ICMP Ping', { exact: true }).click();
     await page.getByText('HTTP', { exact: true }).click();
     await page.getByRole('dialog', { name: 'Add Monitored Device' }).getByText('SNMP', { exact: true }).click();
@@ -134,7 +135,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 768, height: 1024 
       await latency.getByLabel('Latency protocol').selectOption('http');
       const chooser = latency.getByLabel('Latency device');
       await expect(chooser).toHaveValue('all');
-      await expect(chooser.getByRole('option').first()).toHaveText('All Devices');
+      await expect(chooser.getByRole('option').first()).toHaveText('All priority devices');
       await expect(chooser.getByRole('option')).toHaveCount(viewport.width === 390 ? 2 : viewport.width === 768 ? 3 : 4);
       status = 503;
       const failureStart = performance.now();
@@ -320,6 +321,7 @@ test('display and filter MongoDB-backed infrastructure logs', async ({ page, req
   await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
   await page.getByRole('button', { name: 'Infrastructure Logs', exact: true }).click();
+  await page.getByRole('button', { name: 'Integrated app logs', exact: true }).click();
   const warning = page.getByRole('row').filter({ hasText: 'lab-router' });
   await expect(warning.getByText('Link down', { exact: true })).toBeVisible();
   await expect(warning.getByText('Link down on eth0 after exceeding the carrier loss threshold', { exact: true })).toBeHidden();
@@ -377,9 +379,78 @@ test('Settings creates and updates a read-only user', async ({ page, request }) 
   await navigation.getByRole('button', { name: 'Infrastructure Logs' }).click();
   await expect(page.getByRole('heading', { name: 'Infrastructure Logs' })).toBeVisible();
   if (ingestToken) {
+    await page.getByRole('button', { name: 'Integrated app logs', exact: true }).click();
     await expect(page.getByRole('row').filter({ hasText: 'lab-settings' }).locator('summary')).toHaveText('Settings access lab ready');
   }
   await navigation.getByRole('button', { name: /Alerts & Events/ }).click();
   await expect(page.getByRole('heading', { name: 'Alerts & Incidents' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Acknowledge', exact: true })).toHaveCount(0);
+});
+
+test('SNMP workstations stay quiet until priority is selected, with process/service details and separated logs', async ({ page, request }) => {
+  const auth = { Authorization: `Bearer ${token}` };
+  const created = await request.post('/api/v1/devices', { headers: auth, data: {
+    name: 'Validation workstation', ip: '192.0.2.80', initial_check_types: [], collection_mode: 'on_demand',
+    initial_snmp: { params: { version: '3', credential: 'default' } },
+  } });
+  expect(created.status()).toBe(201);
+  const device = await created.json();
+  expect(device.is_priority).toBe(false);
+  const workerToken = randomBytes(32).toString('hex');
+  const enrollment = process.env.ZADDESH_E2E_ENROLLMENT;
+  expect(enrollment).toBeTruthy();
+  expect((await request.post('/api/v1/collectors/register', { headers: { Authorization: `Bearer ${enrollment}` }, data: {
+    name: 'Browser inventory validation', auth_token: workerToken, version: 'validation', hostname: 'browser-lab',
+  } })).status()).toBe(201);
+  const worker = { Authorization: `Bearer ${workerToken}` };
+  await page.addInitScript(value => localStorage.setItem('zaddesh_token', value), token);
+  await page.goto('/');
+  const nav = page.getByRole('navigation', { name: 'Main navigation' });
+  await nav.getByRole('button', { name: 'Discovered Devices', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Discovered Devices' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Validation workstation', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'HTTP lab 1440', exact: true })).toHaveCount(0);
+  const priority = page.getByRole('checkbox', { name: 'Priority alerts for Validation workstation', exact: true });
+  await expect(priority).not.toBeChecked();
+  await page.getByRole('button', { name: 'Validation workstation', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: /Telemetry: Validation workstation/ });
+  await expect(dialog.getByText('Waiting for collector…')).toBeVisible();
+  let job;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const next = await request.post('/api/v1/collectors/inventory-next', { headers: worker });
+    expect(next.status()).toBe(200);
+    job = await next.json();
+    if (job.run_id === device.id) break;
+    expect((await request.post(`/api/v1/collectors/inventory-result/${job.run_id}`, { headers: worker, data: {
+      lease: job.lease, error: 'Earlier browser fixture has no network agent',
+    } })).status()).toBe(200);
+  }
+  expect(job.run_id).toBe(device.id);
+  const base = '1.3.6.1.4.1.8072.1.3.2.4.1.2.';
+  const events = base + '14.122.97.100.100.101.115.104.95.101.118.101.110.116.115.';
+  const services = base + '16.122.97.100.100.101.115.104.95.115.101.114.118.105.99.101.115.';
+  const b64 = (value: string) => Buffer.from(value).toString('base64');
+  expect((await request.post(`/api/v1/collectors/inventory-result/${device.id}`, { headers: worker, data: {
+    lease: job.lease, values: {
+      '1.3.6.1.2.1.1.5.0': 'validation-workstation',
+      '1.3.6.1.2.1.25.4.2.1.2.42': 'validation-process', '1.3.6.1.2.1.25.4.2.1.7.42': '1',
+      [services + '1']: 'Validation service\tRunning', [events + '1']: 'status|ready',
+      [events + '2']: `${b64('browser-validation-event')}|${new Date().toISOString()}|warning|0|1|${b64('Storage warning\nValidation volume has low free space')}`,
+    },
+  } })).status()).toBe(200);
+  await expect(dialog.getByRole('cell', { name: 'validation-process', exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Services (1)' }).click();
+  await expect(dialog.getByRole('cell', { name: 'Validation service', exact: true })).toBeVisible();
+  await expect(dialog.getByText('Storage warning', { exact: true })).toBeVisible();
+  const saved = page.waitForResponse(response => response.url().endsWith(`/api/v1/devices/${device.id}`) && response.request().method() === 'PUT');
+  await dialog.getByRole('checkbox', { name: 'Priority alerts for Validation workstation', exact: true }).check();
+  expect((await saved).status()).toBe(200);
+  await expect(dialog.getByRole('checkbox', { name: 'Priority alerts for Validation workstation', exact: true })).toBeChecked();
+  expect((await (await request.get(`/api/v1/devices/${device.id}`, { headers: auth })).json()).is_priority).toBe(true);
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(value => { localStorage.setItem('zaddesh_theme', value); document.documentElement.classList.toggle('dark', value === 'dark'); }, theme);
+    await page.screenshot({ path: `../.audit/ui-polish/workstation-${theme}.png`, fullPage: true });
+  }
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(accessibility.violations.filter(item => ['critical', 'serious'].includes(item.impact ?? ''))).toEqual([]);
 });

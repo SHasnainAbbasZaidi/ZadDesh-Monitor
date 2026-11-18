@@ -1,3 +1,4 @@
+import { formatMetricValue as formatted } from './formatMetricValue';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowRight, ChevronDown, Server } from 'lucide-react';
 import { Badge } from './Badge';
@@ -55,18 +56,6 @@ function statusFor(device: Device) {
   return ['unknown', device.status === 'disabled' ? 'Disabled' : 'Unknown'];
 }
 const pct = (value: number | null | undefined) => value == null ? 'N/A' : `${Math.round(value)}%`;
-const formatted = (value: number | null | undefined, unit = '') => {
-  if (value == null) return 'N/A';
-  if (unit === 'bps') {
-    const divisor = value >= 1e9 ? 1e9 : value >= 1e6 ? 1e6 : value >= 1e3 ? 1e3 : 1;
-    return `${(value / divisor).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${divisor === 1e9 ? 'Gbps' : divisor === 1e6 ? 'Mbps' : divisor === 1e3 ? 'Kbps' : 'bps'}`;
-  }
-  if (unit === 'B' && value >= 1024) {
-    const exponent = Math.min(4, Math.floor(Math.log(value) / Math.log(1024)));
-    return `${(value / 1024 ** exponent).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${['B', 'KiB', 'MiB', 'GiB', 'TiB'][exponent]}`;
-  }
-  return `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}${unit ? ` ${unit}` : ''}`;
-};
 
 function ResourceMeter({ name, value }: { name: string; value: number | null }) {
   return <div className="infra-meter" data-level={usageTone(value)}>
@@ -260,7 +249,7 @@ export function InfrastructureMonitoring({ fleet, sites, refresh, onNavigate }: 
     async function poll() {
       let interval = 25;
       try {
-        const result = await request<Summary>('/infrastructure-monitoring', { signal: controller.signal });
+        const result = await request<Summary>('/infrastructure-monitoring?priority_only=true', { signal: controller.signal });
         if (!controller.signal.aborted) { setSummary(result); setFailed(false); interval = result.refresh_seconds; }
       } catch {
         if (!controller.signal.aborted) setFailed(true);

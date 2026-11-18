@@ -41,6 +41,8 @@ export interface Device {
   uptime_seconds: number;
   last_seen?: string;
   is_monitored: boolean;
+  is_priority: boolean;
+  collection_mode: 'scheduled' | 'on_demand';
   created_at: string;
   updated_at: string;
 }

@@ -28,7 +28,7 @@ export function OverviewTiles({ stats, incidents, incidentLabel, fleetFailed, on
   onDevices?: () => void; onAlerts: () => void;
 }) {
   const tiles = [
-    { label: 'Total devices', value: stats?.total_devices, color: 'blue', detail: 'Combined inventory', action: onDevices },
+    { label: 'Priority devices', value: stats?.total_devices, color: 'blue', detail: 'Priority inventory', action: onDevices },
     { label: 'Healthy', value: stats?.up, color: 'green', detail: 'Available devices', action: onDevices },
     { label: 'Needs attention', value: stats && stats.down + stats.warning, color: 'amber', detail: 'Down or degraded', action: onDevices },
     { label: incidentLabel, value: incidents?.total, color: 'pink', detail: incidents?.incomplete ? 'Partial incident data' : 'Current alert feed', action: onAlerts },
@@ -87,8 +87,8 @@ export function OverviewDonuts({ fleet, fleetFailed, incidents }: {
   const recent = incidents && Array.from(byCategory, ([category, count]) => ({ ...(incidentGroups[category] ?? incidentGroups.other), count }));
   const share = stats?.total_devices ? new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(stats.up / stats.total_devices) : undefined;
   const fleetSummary = fleetFailed ? fleet ? (fleet.zabbix_unavailable ? 'Zabbix unavailable · Local devices' : 'Last reported fleet status') : 'Fleet status unavailable'
-    : share ? `${share} healthy` : fleet ? 'No devices configured' : 'Waiting for the monitoring API';
-  const sourceSummary = fleetFailed ? fleet ? 'Last available inventory' : 'Inventory unavailable' : 'Combined monitoring inventory';
+    : share ? `${share} healthy` : fleet ? 'No priority devices selected' : 'Waiting for the monitoring API';
+  const sourceSummary = fleetFailed ? fleet ? 'Last available inventory' : 'Inventory unavailable' : 'Priority monitoring inventory';
   const incidentSummary = incidents?.incomplete ? 'Partial incident data' : incidents ? `Showing ${incidents.entries.length} of ${incidents.total} current incidents` : 'Waiting for alert data';
   return <>
     <Donut id="fleet-title" title="Fleet health" summary={fleetSummary} slices={status} unit="devices" />

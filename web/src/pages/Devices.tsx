@@ -7,6 +7,8 @@ import { MetricChart } from '../components/ui/MetricChart';
 import { UptimeSparkline, type ProbeHistory, type ProbeWindow } from '../components/ui/UptimeSparkline';
 import { DefaultSnmpFields, readSnmpInterface, SnmpFields } from '../components/ui/SnmpCheckForm';
 import { useAuth } from '../context/AuthContext';
+import { Logs } from './Logs';
+import { WorkstationInventory } from '../components/ui/WorkstationInventory';
 import { api, request } from '../services/api';
 import { Device, Site, Group, Check } from '../types';
 import {
@@ -26,6 +28,7 @@ import {
 
 interface DevicesProps {
   searchQuery?: string;
+  discoveredOnly?: boolean;
 }
 
 interface MetricSeriesData {
@@ -33,7 +36,11 @@ interface MetricSeriesData {
   value: number;
 }
 
-export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
+function observationTime(value: string) {
+  return new Date(value + (/Z$|[+-]\d\d:\d\d$/.test(value) ? '' : 'Z')).toLocaleTimeString();
+}
+
+export const Devices: React.FC<DevicesProps> = ({ searchQuery = '', discoveredOnly = false }) => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const [loadError, setLoadError] = useState('');
@@ -45,7 +52,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
   const [devices, setDevices] = useState<Device[]>([]);
   const [showZabbix, setShowZabbix] = useState(false);
   const [zabbixHosts, setZabbixHosts] = useState<ZabbixInventoryHost[]>([]);
-  const [zabbixLoading, setZabbixLoading] = useState(isAdmin);
+  const [zabbixLoading, setZabbixLoading] = useState(isAdmin && !discoveredOnly);
   const [zabbixError, setZabbixError] = useState('');
   const [zabbixRefresh, setZabbixRefresh] = useState(0);
   const [localHistory, setLocalHistory] = useState<Awaited<ReturnType<typeof api.getProbeLatency>>>();
@@ -78,7 +85,10 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
   const [groupId, setGroupId] = useState<number | undefined>();
   const [vendor, setVendor] = useState('Generic');
   const [model, setModel] = useState('');
-  const [checkTypes, setCheckTypes] = useState<string[]>(['icmp']);
+  const [checkTypes, setCheckTypes] = useState<string[]>(discoveredOnly ? ['snmp'] : ['icmp']);
+  const [priority, setPriority] = useState(false);
+  const [priorityBusy, setPriorityBusy] = useState<Set<number>>(new Set());
+  const [priorityError, setPriorityError] = useState('');
   const [snmpMode, setSnmpMode] = useState('default');
   const [showDeviceDetails, setShowDeviceDetails] = useState(false);
   const defaultSnmp = checkTypes.includes('snmp') && snmpMode === 'default';
@@ -90,7 +100,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
     try {
       setLoading(true);
       const [dRes, sRes, gRes] = await Promise.all([
-        api.getDevices(),
+        api.getDevices({ snmp_only: discoveredOnly }),
         api.getSites(),
         api.getGroups(),
       ]);
@@ -110,7 +120,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
   }, []);
 
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!isAdmin || discoveredOnly) return;
     const controller = new AbortController();
     async function loadInventory() {
       try {
@@ -125,7 +135,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
     void loadInventory();
     const timer = window.setInterval(loadInventory, 60_000);
     return () => { controller.abort(); window.clearInterval(timer); };
-  }, [isAdmin, zabbixRefresh]);
+  }, [isAdmin, zabbixRefresh, discoveredOnly]);
 
   const selectedId = selectedDevice?.id;
   useEffect(() => {
@@ -188,6 +198,8 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
         group_id: groupId || undefined,
         vendor: vendor || undefined,
         model: model || undefined,
+        is_priority: priority,
+        collection_mode: discoveredOnly ? 'on_demand' : 'scheduled',
         initial_check_types: checkTypes.filter(type => type !== 'snmp'),
         initial_snmp: checkTypes.includes('snmp') ? readSnmpInterface(form) : undefined,
         initial_tcp_port: checkTypes.includes('tcp') ? Number(form.get('tcp-port')) : undefined,
@@ -197,7 +209,8 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
       setIp('');
       setHostname('');
       setModel('');
-      setCheckTypes(['icmp']);
+      setCheckTypes(discoveredOnly ? ['snmp'] : ['icmp']);
+      setPriority(false);
       setSnmpMode('default');
       setShowDeviceDetails(false);
       loadDevices();
@@ -221,6 +234,30 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
       setDeleteError((err as Error).message);
     }
   };
+
+  async function changeMonitoring(device: Device, changes: Partial<Pick<Device, 'is_priority' | 'collection_mode'>>) {
+    setPriorityError('');
+    setPriorityBusy(current => new Set(current).add(device.id));
+    const optimistic = { ...device, ...changes };
+    setDevices(current => current.map(item => item.id === device.id ? optimistic : item));
+    setSelectedDevice(current => current?.id === device.id ? optimistic : current);
+    try {
+      const updated = await api.updateDeviceMonitoring(device.id, changes);
+      setDevices(current => current.map(item => item.id === device.id ? updated : item));
+      setSelectedDevice(current => current?.id === device.id ? updated : current);
+    } catch (failure) {
+      setDevices(current => current.map(item => item.id === device.id ? device : item));
+      setSelectedDevice(current => current?.id === device.id ? device : current);
+      setPriorityError((failure as Error).message);
+    }
+    finally { setPriorityBusy(current => { const next = new Set(current); next.delete(device.id); return next; }); }
+  }
+
+  function priorityCheckbox(device: Device | undefined, label: string) {
+    return <input type="checkbox" aria-label={`Priority alerts for ${label}`} checked={device?.is_priority ?? false}
+      disabled={!device || priorityBusy.has(device.id)} title={device ? 'Only priority devices appear in Alerts' : 'Add this device to ZadDesh to set its priority'}
+      onChange={event => { if (device) void changeMonitoring(device, { is_priority: event.target.checked }); }} />;
+  }
 
   const devicesById = new Map(devices.map(device => [device.id, device]));
   const zabbixLocalIds = new Set(zabbixHosts.flatMap(host => host.local_device_ids));
@@ -339,14 +376,14 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-            Monitored Devices
+            {discoveredOnly ? 'Discovered Devices' : 'Monitored Devices'}
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            ZadDesh devices and hosts visible through the connected Zabbix account.
+            {discoveredOnly ? 'Devices with enabled SNMP checks. Select Priority alerts for devices that require incident notifications.' : 'ZadDesh devices and hosts visible through the connected Zabbix account.'}
           </p>
         </div>
         <div className="flex items-center space-x-3">
-          {isAdmin && <button className="ops-button" onClick={() => setShowZabbix(true)}>Zabbix devices</button>}
+          {isAdmin && !discoveredOnly && <button className="ops-button" onClick={() => setShowZabbix(true)}>Zabbix devices</button>}
           <button
             aria-label="Refresh devices"
             onClick={refreshInventory}
@@ -365,6 +402,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
       </div>
 
       {/* Filter Tabs */}
+      {priorityError && !selectedDevice && <p role="alert" className="ops-notice">{priorityError}</p>}
       <div className="flex items-center space-x-2 overflow-x-auto pb-1">
         {['all', 'up', 'down', 'warning', 'unknown', 'unmanaged'].map((st) => (
           <button
@@ -409,6 +447,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
                 <th className="px-5 py-3.5">Vendor & Model</th>
                 <th className="px-5 py-3.5">Uptime</th>
                 <th className="px-5 py-3.5">Last Seen</th>
+                {isAdmin && <th scope="col" className="px-3 py-3.5">Priority alerts</th>}
                 <th className="px-5 py-3.5 text-right">Actions</th>
               </tr>
             </thead>
@@ -432,6 +471,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
                   <td className="px-5 py-3.5 text-xs ops-muted">—</td>
                   <td className="px-5 py-3.5">{renderUptime(label, health.status === 'down', local?.id, host.hostid)}</td>
                   <td className="px-5 py-3.5 text-xs ops-muted">—</td>
+                  {isAdmin && <td className="px-3 py-3.5">{priorityCheckbox(local, label)}</td>}
                   <td className="px-5 py-3.5 text-right">
                     <div className="flex flex-wrap items-start justify-end gap-2">
                       {local && <button className="ops-button" aria-label={`Local telemetry for ${label}`} onClick={() => openDeviceDetails(local)}>Local telemetry</button>}
@@ -466,8 +506,9 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
                   </td>
                   <td className="px-5 py-3.5">{renderUptime(dev.name, dev.status === 'down', dev.id)}</td>
                   <td className="px-5 py-3.5 text-xs text-slate-400 whitespace-nowrap">
-                    {dev.last_seen ? new Date(dev.last_seen).toLocaleTimeString() : 'Never'}
+                    {dev.last_seen ? observationTime(dev.last_seen) : 'Never'}
                   </td>
+                  {isAdmin && <td className="px-3 py-3.5">{priorityCheckbox(dev, dev.name)}</td>}
                   <td className="px-5 py-3.5 text-right whitespace-nowrap">
                     {isAdmin && <button
                       aria-label={`Delete ${dev.name}`}
@@ -509,6 +550,19 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
           title={`Telemetry: ${selectedDevice.name} (${selectedDevice.ip})`}
         >
           <div className="space-y-6">
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              <label className="flex items-center gap-2">{priorityCheckbox(selectedDevice, selectedDevice.name)} Priority alerts</label>
+              {deviceChecks.some(check => check.check_type === 'snmp' && check.is_enabled) && <label>Collection
+                <select aria-label="Device collection mode" className="dash-select ml-2" value={selectedDevice.collection_mode} disabled={priorityBusy.has(selectedDevice.id)}
+                  onChange={event => void changeMonitoring(selectedDevice, { collection_mode: event.target.value as Device['collection_mode'] })}>
+                  <option value="on_demand">On-demand SNMP</option><option value="scheduled">Scheduled telemetry</option>
+                </select>
+              </label>}
+            </div>
+            {priorityError && <p role="alert" className="ops-notice">{priorityError}</p>}
+            {selectedDevice.collection_mode === 'on_demand' && <p className="ops-muted text-xs">SNMP collection runs when opening these details or refreshing the snapshot. Status reflects the last observation. Priority alerts update on snapshots; choose scheduled collection for continuous checks.</p>}
+            {deviceChecks.some(check => check.check_type === 'snmp' && check.is_enabled) && <WorkstationInventory deviceId={selectedDevice.id} />}
+            <Logs key={selectedDevice.id} deviceId={selectedDevice.id} embedded />
             {/* Meta header */}
             <div className="grid grid-cols-3 gap-3 p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-800 text-xs">
               <div>
@@ -525,7 +579,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
                 <span className="text-slate-400 block text-[10px] uppercase font-mono">Last Seen</span>
                 <span className="font-mono text-slate-800 dark:text-slate-200">
                   {selectedDevice.last_seen
-                    ? new Date(selectedDevice.last_seen).toLocaleTimeString()
+                    ? observationTime(selectedDevice.last_seen)
                     : 'Never'}
                 </span>
               </div>
@@ -707,6 +761,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
             <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
               Initial Check Presets
             </label>
+            <label className="mb-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={priority} onChange={event => setPriority(event.target.checked)} /> Priority alerts</label>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
               {[
                 { id: 'icmp', label: 'ICMP Ping' },
@@ -714,7 +769,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
                 { id: 'https', label: 'HTTPS' },
                 { id: 'tcp', label: 'TCP Port' },
                 { id: 'snmp', label: 'SNMP' },
-              ].map((chk) => {
+              ].filter(chk => !discoveredOnly || chk.id === 'snmp').map((chk) => {
                 const checked = checkTypes.includes(chk.id);
                 return (
                   <label
@@ -728,6 +783,7 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '' }) => {
                     <input
                       type="checkbox"
                       checked={checked}
+                      disabled={discoveredOnly && chk.id === 'snmp'}
                       onChange={(e) => {
                         if (e.target.checked) setCheckTypes([...checkTypes, chk.id]);
                         else setCheckTypes(checkTypes.filter((x) => x !== chk.id));

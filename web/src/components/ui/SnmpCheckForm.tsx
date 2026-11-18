@@ -4,6 +4,7 @@ import { api } from '../../services/api';
 import type { Check, Device } from '../../types';
 import windowsAgent from '../../agents/setup-windows-snmp.ps1?raw';
 import linuxAgent from '../../agents/setup-linux-snmp.sh?raw';
+import { includeEventLogInstaller } from '../../agents/includeEventLogInstaller';
 
 const inputClass = 'mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800';
 
@@ -146,7 +147,7 @@ export function DefaultSnmpFields({ ip }: { ip: string }) {
     const profileText = windows
       ? `$agentPort = ${udpPort}\n$agentAuth = '${selected.auth}'\n$agentPrivacy = '${selected.privacy}'`
       : `agent_port=${udpPort}\nlisten_ip='${address}'\nauth='${selected.auth}'\nprivacy='${selected.privacy}'`;
-    const script = (windows ? windowsAgent : linuxAgent).replace('# ZADDESH GENERATED PROFILE', profileText);
+    const script = includeEventLogInstaller(windows ? windowsAgent : linuxAgent, windows ? 'windows' : 'linux').replace('# ZADDESH GENERATED PROFILE', profileText);
     const filename = windows ? 'setup-windows-snmp.ps1' : 'setup-linux-snmp.sh';
     let url: string | undefined;
     try {
