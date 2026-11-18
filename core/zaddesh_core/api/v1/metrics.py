@@ -5,7 +5,7 @@ import hashlib
 import json
 import logging
 import time
-from typing import Literal, cast as typing_cast
+from typing import Any, Literal, cast as typing_cast
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import BigInteger, and_, case, cast, extract, func, or_, select
@@ -18,7 +18,7 @@ from zaddesh_core.models.metrics import MetricRaw
 from zaddesh_core.models.infrastructure import Collector, Device
 from zaddesh_core.models.alerts import Alert, Event
 from zaddesh_core.config import settings
-from zaddesh_core.incidents import availability_context, record_availability
+from zaddesh_core.incidents import availability_context, record_availability, evaluate_snmp_rules
 from zaddesh_core.models.checks import Check, CheckState
 from zaddesh_core.models.auth import User
 from zaddesh_core.schemas.metric import (
@@ -69,7 +69,7 @@ def ingest_metrics(
                     "http": "http.available", "https": "http.available"}
     observations: dict[int, tuple[datetime.datetime, bool]] = {}
     incident_samples: dict[int, dict[datetime.datetime, bool]] = {}
-    records = []
+    records: list[dict[str, Any]] = []
     now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     for point in payload.points:
         device = devices.get(point.device_id)
@@ -144,6 +144,14 @@ def ingest_metrics(
             incident_context = availability_context(db, [checks[check_id] for check_id, times in pending.items() if times],
                                                    min(timestamps), max(timestamps))
     touched = set()
+    for row in records:
+        check = checks.get(row['check_id'])
+        if check and check.check_type == 'snmp' and row['metric_key'] == 'snmp.supported' and row['value'] == 0:
+            state = next((item for item in states if item.check_id == check.id), None) or db.get(CheckState, check.id)
+            if state is not None and (state.last_check_time is None or row['timestamp'] > state.last_check_time):
+                state.current_status, state.last_check_time = 'unknown', row['timestamp']
+                state.message = 'SNMP metric unsupported or unavailable; device outage is unconfirmed'
+                touched.add(check.device_id)
     for state in states:
         timestamp, ok = observations[state.check_id]
         if state.last_check_time is not None and timestamp <= state.last_check_time:
@@ -168,25 +176,27 @@ def ingest_metrics(
         state.last_change_time = timestamp
         if incidents_enabled:
             continue
-        title = f"Availability: {check.name}"
-        open_alert = open_alerts.get((check.id, title))
+        title = 'SNMP Unreachable' if check.check_type == 'snmp' else f"Availability: {check.name}"
+        open_alert = open_alerts.get((check.id, title)) or open_alerts.get((check.id, f'Availability: {check.name}'))
         if not ok and open_alert is None and devices[check.device_id].is_priority:
             db.add(Alert(device_id=check.device_id, check_id=check.id, title=title,
-                         message="Probe failed", severity="critical", triggered_at=timestamp))
+                         message=(f'{devices[check.device_id].name} ({devices[check.device_id].ip}); SNMP communication failed; device outage is unconfirmed.'
+                                  if check.check_type == 'snmp' else 'Probe failed'),
+                         severity='warning' if check.check_type == 'snmp' else 'critical', triggered_at=timestamp))
         if ok and open_alert is not None:
             open_alert.status = "resolved"
             open_alert.resolved_at = timestamp
         db.add(Event(device_id=check.device_id, check_id=check.id, event_type="state_change",
-                     severity="info" if ok else "critical", title=title,
+                     severity="info" if ok else 'warning' if check.check_type == 'snmp' else "critical", title=title,
                      message=state.message, timestamp=timestamp))
 
     if touched:
         db.flush()
         summary: dict[int, set[str]] = {device_id: set() for device_id in touched}
-        for device_id, status_name in db.query(Check.device_id, CheckState.current_status).join(
+        for device_id, status_name, protocol in db.query(Check.device_id, CheckState.current_status, Check.check_type).join(
             CheckState, CheckState.check_id == Check.id,
         ).filter(Check.device_id.in_(touched), Check.is_enabled.is_(True)).distinct():
-            summary[device_id].add(status_name)
+            summary[device_id].add('unknown' if protocol == 'snmp' and status_name == 'critical' else status_name)
         for device_id, statuses in summary.items():
             device = devices[device_id]
             if device.is_monitored:
@@ -198,6 +208,7 @@ def ingest_metrics(
             days=settings.features.event_retention_days,
         )).delete()
     before_commit = time.monotonic()
+    evaluate_snmp_rules(db, records, checks, devices, now)
     db.commit()
     completed = time.monotonic()
     if completed - started > 5:

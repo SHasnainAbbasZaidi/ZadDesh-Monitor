@@ -177,6 +177,8 @@ def accept_inventory(device_id: int, payload: InventoryResult, collector: Collec
     if not payload.error:
         from zaddesh_core.hardware_identity import apply_identity, snmp_identity
         apply_identity(device, snmp_identity(payload.values))
+        from zaddesh_core.incidents import evaluate_snmp_observation
+        evaluate_snmp_observation(db, check, device, payload.values, now)
         previous = row.data or {}
         row.data = parse_inventory(payload.values)
         row.data = {**row.data, **save_client_logs(db, device_id, check.id, payload.values)}
@@ -201,7 +203,7 @@ def accept_inventory(device_id: int, payload: InventoryResult, collector: Collec
     state.current_status, state.last_check_time = "ok" if ok else "critical", now
     state.last_change_time = now if previous_status != state.current_status else state.last_change_time
     state.message = row.message or "SNMP inventory collected"
-    device.status = "up" if ok else "down"
+    device.status = "up" if ok else "unknown"
     if ok:
         device.last_seen = now
     db.add(MetricRaw(device_id=device_id, check_id=check.id, metric_key="snmp.available", value=1.0 if ok else 0.0,

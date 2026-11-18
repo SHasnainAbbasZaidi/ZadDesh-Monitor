@@ -58,6 +58,29 @@ RESOURCE_CATEGORIES = tuple(
     for category, subjects in RESOURCE_TERMS.items()
 )
 
+# Additional impact-bearing faults reuse the existing Other category and Critical view.
+FAULT_TERMS: tuple[str, ...] = ('fan failure', 'power supply failure', 'power supply failed', 'temperature critical', 'voltage critical',
+               'raid degraded', 'raid failure', 'disk failure', 'vpn tunnel down', 'vpn tunnel failed',
+               'service stopped', 'service not running', 'process count critical', 'camera offline', 'recording failed')
+FAULT_TERMS += ('transceiver failure', 'sfp failure', 'err-disabled', 'errdisabled', 'module failure',
+                'bgp neighbor down', 'bgp neighbor failure', 'ospf neighbor down', 'ospf neighbor failure',
+                'default route missing', 'routing table capacity critical', 'wan failover failure',
+                'sd-wan link failure', 'sd-wan health check failure', 'sd-wan packet loss critical',
+                'sd-wan latency critical', 'sd-wan jitter critical', 'ha cluster member failure',
+                'ha heartbeat failure', 'ha failover', 'log storage full', 'ips attack', 'antivirus malware',
+                'dhcp pool exhaust', 'camera overheating', 'camera tamper', 'video signal failure',
+                'camera storage failure', 'edge storage full', 'recording disruption', 'camera authentication failure',
+                'ptz hardware failure', 'camera housing alarm', 'poe power failure', 'storage array degraded',
+                'nvr temperature critical', 'nvr recording failure', 'camera disconnected from nvr',
+                'unexpected reboot', 'unexpected camera reboot', 'unexpected nvr reboot',
+                'port flapping', 'interface flapping', 'excessive stp topology changes', 'network loop',
+                'broadcast storm', 'etherchannel member failure', 'interface errors', 'crc errors',
+                'packet drops', 'packet discards', 'swap space critical', 'uplink down', 'wan interface down', 'lan interface down')
+
+
+def critical_fault(title: str) -> bool:
+    return any(term in title.casefold() for term in FAULT_TERMS)
+
 
 def zabbix_category(title: str, hosts: str) -> str:
     text = f" {title.casefold()} "
@@ -92,11 +115,11 @@ def alert_category():
             select(TopologyNode.id).where(TopologyNode.id.in_((TopologyLink.source_id, TopologyLink.target_id)),
                                           TopologyNode.kind == "server").correlate(TopologyLink).exists()),
     ).correlate(Incident).exists()
-    link = and_(contains(title, LINK_DOWN_TERMS), or_(contains(title, TEN_GIG_TERMS), contains(context, SERVER_TERMS), topology_link))
+    link = or_(and_(Alert.title == 'Uplink Down', Alert.severity == 'critical'),
+               and_(contains(title, LINK_DOWN_TERMS), or_(contains(title, TEN_GIG_TERMS), contains(context, SERVER_TERMS), topology_link)))
     offline = or_(Alert.title.ilike("device offline%"), Alert.title.ilike("device down%"),
                   and_(Alert.rule_id.is_(None), Alert.title.startswith("Availability: "),
-                       or_(Check.check_type == "icmp", and_(Check.check_type == "snmp", or_(Device.collection_mode == "on_demand",
-                           func.coalesce(Check.params["oid"].as_string(), "1.3.6.1.2.1.1.3.0") == "1.3.6.1.2.1.1.3.0"))), Device.status == "down"))
+                       Check.check_type == "icmp", Device.status == "down"))
     resources = [(and_(contains(title, subjects), contains(title, triggers)), category)
                  for category, subjects, triggers in RESOURCE_CATEGORIES]
     return case((offline, "device_offline"), (link, "link_down"), *resources, else_="other")
@@ -126,7 +149,7 @@ def alert_summary(alert, incident, device, check, site, category):
         "duration_seconds": max(0, int(((alert.resolved_at or now) - alert.triggered_at).total_seconds())),
         "occurrences": incident.occurrence_count if incident else 1, "flapping": bool(incident and incident.flapping),
         "type": "link" if incident and incident.correlation_key.startswith("link:") else
-        "availability" if alert.rule_id is None and alert.title.startswith("Availability: ") else "rule",
+        "availability" if (incident and incident.correlation_key.startswith('availability:')) or (alert.rule_id is None and alert.title.startswith("Availability: ")) else "rule",
         "device_id": device.id, "device": device.name, "check": check.name if check else None,
         "site": site.name if site else None,
     }
@@ -165,7 +188,9 @@ def list_incidents(
             query = query.filter(or_(Alert.status == "resolved", Alert.triggered_at <= cutoff))
     classification = alert_category()
     if category:
-        query = query.filter(classification != "other" if category == "critical"
+        query = query.filter(or_(classification != "other", and_(Alert.severity.in_(("high", "critical")),
+                             or_(func.coalesce(Incident.correlation_key, "").startswith("snmp:"),
+                                 *(Alert.title.icontains(term, autoescape=True) for term in FAULT_TERMS)))) if category == "critical"
                              else classification == category)
     if hide_connection_noise:
         query = query.filter(or_(classification != "other", ~connection_noise(Alert.title)))
@@ -177,7 +202,8 @@ def list_incidents(
                                                              Incident.silenced_until > utc_now()))
     elif status:
         query = query.filter(Alert.status == status)
-    availability = Alert.rule_id.is_(None) & Alert.title.startswith("Availability: ")
+    availability = or_(Alert.rule_id.is_(None) & Alert.title.startswith("Availability: "),
+                       func.coalesce(Incident.correlation_key, '').startswith('availability:'))
     link_type = func.coalesce(Incident.correlation_key, "").startswith("link:")
     if type:
         query = query.filter({"availability": availability, "link": link_type, "rule": ~availability & ~link_type}[type])
@@ -304,7 +330,8 @@ def zabbix_incident_feed(
             group = zabbix_category(title, names)
             if group == "other" and ZABBIX_NOISE.search(title):
                 continue
-            if category and (group == "other" if category == "critical" else category != group):
+            important = critical_fault(title) and str(row.get('severity')) in {'4', '5'}
+            if category and ((group == "other" and not important) if category == "critical" else category != group):
                 continue
             if kind == "problems" and type and group != alert_types.get(type):
                 continue

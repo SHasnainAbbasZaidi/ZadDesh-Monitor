@@ -279,7 +279,7 @@ def template_default(kind):
              "escalation": "Escalated", "reminder": "Still active"}[kind]
     lines = ["Device: {{device_name}} ({{device_ip}})", "Category: {{device_category}}", "Interface: {{interface_name}}", "Problem: {{problem}}",
              "Severity: {{severity}}", "Detected: {{detected_at}}", "Status: {{device_status}}",
-             "Elapsed: {{duration}}", "Zabbix event: {{event_id}}", "Dashboard: {{dashboard_link}}"]
+             "Elapsed: {{duration}}", "Event: {{event_id}}", "Dashboard: {{dashboard_link}}"]
     if kind == "recovery":
         lines.insert(7, "Recovered: {{recovered_at}}")
     return {"subject": f"[{label}] {{{{device_name}}}} · {{{{problem}}}}", "text": f"{label}\n\n" + "\n".join(lines),

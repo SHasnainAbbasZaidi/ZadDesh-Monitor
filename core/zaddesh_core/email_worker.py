@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from cryptography.exceptions import InvalidTag
 from fastapi import HTTPException
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import BigInteger, String, cast, delete, extract, func, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from pymongo.errors import PyMongoError
 
@@ -24,6 +24,8 @@ from zaddesh_core.infrastructure_monitoring import classify, identifier, objects
 from zaddesh_core.models.email_alerts import EmailAttempt, EmailDelivery, EmailProblem, EmailRecipient, EmailRule, EmailSettings, EmailTemplate
 from zaddesh_core.models.zabbix import ZabbixConnection
 from zaddesh_core.models.infrastructure import Device
+from zaddesh_core.models.alerts import Alert
+from datetime import datetime, timedelta, timezone
 from zaddesh_core.security import decrypt_secret
 
 logger = logging.getLogger(__name__)
@@ -271,6 +273,50 @@ def observe(db, state, events, recovered, inventory, token, now, is_new, capacit
     return capacity
 
 
+def poll_native(db, state, now):
+    """Route native incidents through the same rules, durable queue, and SMTP worker."""
+    from zaddesh_core.api.v1.incidents import zabbix_category
+    from zaddesh_core.incidents import suppression_reason, redact
+    cutoff = datetime.fromtimestamp(now, timezone.utc).replace(tzinfo=None) - timedelta(hours=8)
+    from zaddesh_core.api.v1.incidents import joined_alerts, alert_not_dismissed
+    episode = 'native:' + cast(Alert.id, String) + ':' + cast(cast(extract('epoch', Alert.triggered_at), BigInteger), String)
+    fresh = datetime.fromtimestamp(now-300, timezone.utc).replace(tzinfo=None)
+    rows = joined_alerts(db).outerjoin(EmailProblem, EmailProblem.key == episode).filter(
+        Alert.triggered_at >= cutoff, alert_not_dismissed(),
+        or_(EmailProblem.key.is_not(None), Alert.triggered_at >= fresh),
+        or_(EmailProblem.key.is_not(None), Alert.status != 'resolved')).order_by(
+        func.coalesce(EmailProblem.observed_at, 0), Alert.triggered_at, Alert.id).limit(200).all()
+    rules, recipients = configured_items(db, EmailRule), configured_items(db, EmailRecipient)
+    capacity = QUEUE_LIMIT - pending_count(db)
+    for alert, incident, device, check, site, category in rows:
+        stamp = int(alert.triggered_at.replace(tzinfo=timezone.utc).timestamp())
+        key = f'native:{alert.id}:{stamp}'
+        problem = db.get(EmailProblem, key)
+        if problem is None and alert.status == 'resolved':
+            continue  # Do not notify about an episode never observed while active.
+        if problem is None and stamp < now - 300:
+            continue  # Enabling native routing must not email a historical-alert backlog.
+        level = {'critical': 5, 'high': 4, 'average': 3, 'warning': 2, 'info': 1}.get(alert.severity, 1)
+        kind = zabbix_category(alert.title, device.name)
+        if kind == 'other':
+            kind = next((value for value, pattern in PROBLEM_PATTERNS if re.search(pattern, alert.title, re.I)), 'other')
+        if problem is None:
+            problem = EmailProblem(key=key, source='native', event_id=str(alert.id), observed_at=now, severity=level,
+                notified_severity=level, context={})
+            db.add(problem)
+        problem.context = {'name': redact(device.name), 'ip': device.ip, 'problem': redact(alert.title), 'problem_type': kind,
+            'category': classify({'name': f'{device.name} {device.os or ""} {device.vendor or ""}'}), 'detected_at': stamp,
+            'event_id': str(alert.id), 'host_ids': [], 'host_group_ids': [], 'tags': {}, 'ports': [],
+            'peak_severity': max(level, problem.context.get('peak_severity', -1))}
+        problem.observed_at, problem.severity = now, level
+        at = datetime.fromtimestamp(now, timezone.utc).replace(tzinfo=None)
+        problem.suppressed = bool(suppression_reason(db, device, at) or
+            (incident and (incident.suppression or (incident.silenced_until and incident.silenced_until > at))))
+        if alert.status == 'resolved' and alert.resolved_at:
+            problem.resolved_at = int(alert.resolved_at.replace(tzinfo=timezone.utc).timestamp())
+        capacity = schedule_problem(db, state.config, problem, rules, recipients, now, capacity)
+
+
 def poll_once(now=None):
     from zaddesh_core.api.v1.zabbix import source_key
 
@@ -285,9 +331,11 @@ def poll_once(now=None):
                              EmailSettings.generation == generation).values(poll_after=lease)).rowcount
         if not claimed:
             return
+        poll_native(db, state, now)
         connection = db.get(ZabbixConnection, 1)
         if connection is None:
-            state.poll_after, state.poll_error = now + POLL_SECONDS, "Connect Zabbix to send infrastructure notifications"
+            state.poll_after, state.poll_error = now + POLL_SECONDS, None
+            state.last_poll = now
             db.commit()
             return
         source = source_key(connection.api_url)
@@ -435,7 +483,13 @@ def send_once(now=None):
         if notice.problem_key:
             problem = db.get(EmailProblem, notice.problem_key)
             connection = db.get(ZabbixConnection, 1)
-            if not problem or not connection or problem.source != source_key(connection.api_url) or (problem.resolved_at and notice.kind != "recovery"):
+            native = problem is not None and problem.source == 'native'
+            native_alert = db.get(Alert, int(problem.event_id)) if native else None
+            native_stale = native and (native_alert is None or
+                int(native_alert.triggered_at.replace(tzinfo=timezone.utc).timestamp()) != problem.context['detected_at'] or
+                (native_alert.status == 'resolved' and notice.kind != 'recovery') or
+                (native_alert.status != 'resolved' and notice.kind == 'recovery'))
+            if not problem or native_stale or (not native and (not connection or problem.source != source_key(connection.api_url))) or (problem.resolved_at and notice.kind != "recovery"):
                 notice.status, notice.last_error = "cancelled", "Event is no longer eligible to send"
                 db.commit()
                 return
@@ -456,7 +510,7 @@ def send_once(now=None):
                 notice.next_attempt = now + 60
                 db.commit()
                 return
-        check_native = bool(notice.problem_key and state.config["avoid_native"])
+        check_native = bool(notice.problem_key and not notice.problem_key.startswith('native:') and state.config["avoid_native"])
         notice.status, notice.next_attempt = "sending", now + LEASE_SECONDS
         notice.attempts += 1
         state.send_after = now + SEND_SECONDS

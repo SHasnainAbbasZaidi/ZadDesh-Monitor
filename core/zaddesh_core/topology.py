@@ -169,13 +169,18 @@ def link_incident(db: Session, link: TopologyLink, device: Device, now: datetime
         timeline(db, alert.id, now, "resolved", "Interface recovered")
         db.add(Event(device_id=device.id, event_type="link_up", severity="info", title="Link up", message=alert.message, timestamp=now))
     elif link.status == "down":
-        title = f"Link Down: {device.name} · {link.source_port}"[:255]
-        message = f"Interface {link.source_port} on {device.name} reported down. Remote port: {link.target_port}."
+        expected = max((number(item.get('expected_speed')) or 0 for item in (link.evidence or {}).values() if isinstance(item, dict)), default=0)
+        server_link = db.query(TopologyNode.id).filter(TopologyNode.id.in_((link.source_id, link.target_id)), TopologyNode.kind == 'server').first()
+        critical = bool(max(link.speed or 0, expected) >= 10_000_000_000 or server_link or
+            re.search(r'\b(server|windows|linux|esxi|hyper-v)\b', f'{device.name} {device.os or ""}', re.I) or
+            re.search(r'uplink|trunk|tengig|\bte\d|\bxe-', f'{link.source_port} {link.target_port}', re.I))
+        title = 'Uplink Down' if critical else 'Interface Down'
+        message = f'{device.name} ({device.ip}); interface {link.source_port} reported down; remote port {link.target_port}.'
         if not device.is_priority:
             db.add(Event(device_id=device.id, event_type="link_down", severity="warning", title=title, message=message, timestamp=now))
             return
         if alert is None:
-            alert = Alert(device_id=device.id, severity="critical", status="active", title=title, message=message, triggered_at=now)
+            alert = Alert(device_id=device.id, severity="critical" if critical else "warning", status="active", title=title, message=message, triggered_at=now)
             db.add(alert)
             db.flush()
             incident = Incident(alert_id=alert.id, correlation_key=key, occurrence_count=0, flapping=False, transitions=[])

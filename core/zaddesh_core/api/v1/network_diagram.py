@@ -417,6 +417,8 @@ def submit_result(run_id: int, payload: JobResult, request: Request, collector: 
         db.query(TopologyDiagram).filter_by(id=run.diagram_id).with_for_update().one()
         count = merge_observation(db, run.diagram_id, device, payload.values,
                                   findings_version=check.params.get("version", "3") if findings else None)
+        from zaddesh_core.incidents import evaluate_snmp_observation
+        evaluate_snmp_observation(db, check, device, payload.values, utc_now())
         run.status, run.message = "complete", f"Collected {len(payload.values)} OIDs and observed {count} links"
     run.finished_at = utc_now()
     audit(db, None, "topology.discovery_finished", run.diagram_id, {"run_id": run.id, "status": run.status})
