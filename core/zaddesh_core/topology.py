@@ -80,6 +80,11 @@ def parse_interfaces(data: dict[str, str], prior: dict[str, Any], now: datetime)
     high_speed = column(data, IFX + ".15")
     incoming = column(data, IFX + ".6")
     outgoing = column(data, IFX + ".10")
+    high_in, high_out = set(incoming), set(outgoing)
+    incoming = column(data, IF + '.10') | incoming
+    outgoing = column(data, IF + '.16') | outgoing
+    types = column(data, IF + '.3')
+    connectors = column(data, IFX + '.17')
     admin = column(data, IF + ".7")
     aliases = column(data, IFX + ".18")
     discontinuities = column(data, IFX + ".19")
@@ -96,19 +101,24 @@ def parse_interfaces(data: dict[str, str], prior: dict[str, Any], now: datetime)
         tx = number(outgoing.get(index))
         previous = prior.get(index)
         discontinuity = discontinuities.get(index)
+        counter_source = f'{64 if index in high_in else 32}/{64 if index in high_out else 32}'
         utilization = None
-        if previous and previous.get("discontinuity") == discontinuity and rate and rx is not None and tx is not None and previous.get("rx") is not None and previous.get("tx") is not None:
+        rx_bps = tx_bps = None
+        if previous and previous.get("counter_source", "64/64") == counter_source and previous.get("discontinuity") == discontinuity and rx is not None and tx is not None and previous.get("rx") is not None and previous.get("tx") is not None:
             seconds = (now - datetime.fromisoformat(previous["at"])).total_seconds()
             if seconds > 0 and rx >= previous["rx"] and tx >= previous["tx"]:
-                utilization = min(100.0, 800 * max(rx - previous["rx"], tx - previous["tx"]) / (rate * seconds))
+                utilization = min(100.0, 800 * max(rx - previous["rx"], tx - previous["tx"]) / (rate * seconds)) if rate else None
+                rx_bps, tx_bps = 8 * (rx-previous['rx'])/seconds, 8 * (tx-previous['tx'])/seconds
         operational = {"1": "up", "2": "down", "6": "down", "7": "down"}.get(status.get(index, ""), "unknown")
         port = bridge.get(index, "")
         previous_speed = (previous.get("expected_speed") or previous.get("speed") or 0) if previous else 0
         expected = max(previous_speed, rate or 0) or None
         result[index] = {"name": name, "alias": aliases.get(index), "status": operational,
+                         'interface_type': types.get(index), 'connector_present': {'1': True, '2': False}.get(connectors.get(index, '')),
+                         'rx_bps': rx_bps, 'tx_bps': tx_bps,
                          "admin_status": {"1": "up", "2": "down", "3": "testing"}.get(admin.get(index, "")),
                          "speed": rate, "expected_speed": expected, "rx": rx, "tx": tx, "utilization": utilization,
-                         "discontinuity": discontinuity, "pvid": number(pvid.get(port)),
+                         "discontinuity": discontinuity, "counter_source": counter_source, "pvid": number(pvid.get(port)),
                          "egress_vlans": sorted(egress[port]) if port in egress else None,
                          "untagged_vlans": sorted(untagged[port]) if port in untagged else None,
                          "at": now.isoformat(), **{key: number(values.get(index)) for key, values in counters.items()}}
@@ -274,7 +284,9 @@ def merge_observation(db: Session, diagram_id: int, device: Device, data: dict[s
     sys_name = data.get("1.3.6.1.2.1.1.5.0", device.name)
     sys_descr = data.get("1.3.6.1.2.1.1.1.0", "")
     interfaces = parse_interfaces(data, source.metadata_json.get("interfaces", {}), now)
-    source.metadata_json = redact({"sys_name": sys_name, "sys_description": sys_descr, "interfaces": interfaces})
+    from zaddesh_core.endpoint_tracing import endpoints
+    source.metadata_json = redact({"sys_name": sys_name, "sys_description": sys_descr, "interfaces": interfaces,
+                                   "endpoints": endpoints(data, interfaces, now), "observed_at": now.isoformat()+'Z'})
     if findings_version:
         source.metadata_json = {**source.metadata_json, "snmp_version": findings_version}
     if not source.manual:

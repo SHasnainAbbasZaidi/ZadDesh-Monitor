@@ -18,6 +18,7 @@ from zaddesh_core.api.v1.infrastructure_monitoring import router as infrastructu
 from zaddesh_core.api.v1.email_alerts import router as email_alerts_router
 from zaddesh_core.api.v1.integrations import router as integrations_router
 from zaddesh_core.api.v1.workstations import router as workstations_router
+from zaddesh_core.api.v1.dashboard_tools import router as dashboard_tools_router
 
 api_v1_router = APIRouter(prefix="/api/v1")
 
@@ -40,6 +41,7 @@ api_v1_router.include_router(email_alerts_router)
 api_v1_router.include_router(integrations_router)
 api_v1_router.include_router(workstations_router)
 api_v1_router.include_router(fleet_router)
+api_v1_router.include_router(dashboard_tools_router)
 
 
 @api_v1_router.get("/features", tags=["Add-ons"])

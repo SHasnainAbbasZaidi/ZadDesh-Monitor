@@ -146,6 +146,12 @@ def ingest_metrics(
     touched = set()
     for row in records:
         check = checks.get(row['check_id'])
+        if check and check.params.get('operation') == 'wan_speed_test' and row['metric_key'].startswith('wan.test.') and row['metric_key'].endswith('.ok'):
+            wan_state = db.get(CheckState, check.id)
+            if wan_state is not None and (wan_state.last_check_time is None or row['timestamp'] > wan_state.last_check_time):
+                wan_state.current_status = 'ok' if row['value'] == 1 else 'warning'
+                wan_state.last_check_time = row['timestamp']
+                wan_state.message = 'WAN throughput measured' if row['value'] == 1 else row['tags'].get('reason', 'WAN test failed; device outage is unconfirmed')
         if check and check.check_type == 'snmp' and row['metric_key'] == 'snmp.supported' and row['value'] == 0:
             state = next((item for item in states if item.check_id == check.id), None) or db.get(CheckState, check.id)
             if state is not None and (state.last_check_time is None or row['timestamp'] > state.last_check_time):
@@ -195,7 +201,7 @@ def ingest_metrics(
         summary: dict[int, set[str]] = {device_id: set() for device_id in touched}
         for device_id, status_name, protocol in db.query(Check.device_id, CheckState.current_status, Check.check_type).join(
             CheckState, CheckState.check_id == Check.id,
-        ).filter(Check.device_id.in_(touched), Check.is_enabled.is_(True)).distinct():
+        ).filter(Check.device_id.in_(touched), Check.is_enabled.is_(True), func.coalesce(Check.params['operation'].as_string(), '') != 'wan_speed_test').distinct():
             summary[device_id].add('unknown' if protocol == 'snmp' and status_name == 'critical' else status_name)
         for device_id, statuses in summary.items():
             device = devices[device_id]
