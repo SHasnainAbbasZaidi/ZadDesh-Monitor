@@ -565,9 +565,9 @@ export const Devices: React.FC<DevicesProps> = ({ searchQuery = '', discoveredOn
             </div>
             {priorityError && <p role="alert" className="ops-notice">{priorityError}</p>}
             {selectedDevice.collection_mode === 'on_demand' && <p className="ops-muted text-xs">SNMP collection runs when opening these details or refreshing the snapshot. Status reflects the last observation. Priority alerts update on snapshots; choose scheduled collection for continuous checks.</p>}
+            <PortLayout deviceId={selectedDevice.id}/>
             {deviceChecks.some(check => check.check_type === 'snmp' && check.is_enabled) && <WorkstationInventory deviceId={selectedDevice.id} />}
             <Logs key={selectedDevice.id} deviceId={selectedDevice.id} embedded />
-            <PortLayout deviceId={selectedDevice.id}/>
             {/* Meta header */}
             <div className="grid grid-cols-3 gap-3 p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-800 text-xs">
               <div>
