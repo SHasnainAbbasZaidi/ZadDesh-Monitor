@@ -253,6 +253,10 @@ const TOPOLOGY_ROOTS: &[&str] = &[
     "1.3.6.1.2.1.47.1.1.1.1.12",    // Chassis manufacturer
     "1.3.6.1.2.1.47.1.1.1.1.13",    // Chassis model
     "1.3.6.1.2.1.2.2.1.2",          // ifDescr
+    "1.3.6.1.2.1.2.2.1.3",          // ifType
+    "1.3.6.1.2.1.31.1.1.1.17",      // ifConnectorPresent
+    "1.3.6.1.2.1.2.2.1.10",         // 32-bit inbound fallback
+    "1.3.6.1.2.1.2.2.1.16",         // 32-bit outbound fallback
     "1.3.6.1.2.1.2.2.1.5",          // ifSpeed
     "1.3.6.1.2.1.2.2.1.8",          // ifOperStatus
     "1.3.6.1.2.1.31.1.1.1.1",       // ifName
@@ -278,6 +282,11 @@ const TOPOLOGY_ROOTS: &[&str] = &[
     "1.3.6.1.2.1.2.2.1.14",         // ifInErrors
     "1.3.6.1.2.1.2.2.1.19",         // ifOutDiscards
     "1.3.6.1.2.1.2.2.1.20",         // ifOutErrors
+    "1.3.6.1.2.1.17.4.3.1.2",       // Learned MAC forwarding ports
+    "1.3.6.1.2.1.17.4.3.1.3",       // Forwarding entry status
+    "1.3.6.1.2.1.17.7.1.2.2.1.2",   // VLAN-aware forwarding ports
+    "1.3.6.1.2.1.17.7.1.2.2.1.3",   // VLAN-aware entry status
+    "1.3.6.1.2.1.4.22.1.2",         // IPv4 ARP physical addresses
 ];
 
 fn topology_value(value: Value<'_>) -> Option<String> {
@@ -440,7 +449,18 @@ async fn walk_roots(
                     done = true;
                     break;
                 }
-                let decoded = if workstation {
+                let decoded = if name.starts_with("1.3.6.1.2.1.4.22.1.2.") {
+                    match value {
+                        Value::OctetString(bytes) if bytes.len() == 6 => Some(
+                            bytes
+                                .iter()
+                                .map(|byte| format!("{byte:02x}"))
+                                .collect::<Vec<_>>()
+                                .join(":"),
+                        ),
+                        _ => None,
+                    }
+                } else if workstation {
                     match value {
                         Value::OctetString(bytes) => Some(
                             String::from_utf8_lossy(bytes)
