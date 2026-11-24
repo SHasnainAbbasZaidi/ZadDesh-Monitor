@@ -31,6 +31,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'devices', label: 'Devices', icon: Server },
     { id: 'discovered', label: 'Discovered Devices', icon: Network },
     { id: 'checks', label: 'Checks', icon: Activity },
+    { id: 'endpoint-trace', label: 'Live Endpoint Trace', icon: Network },
+    { id: 'custom-dashboards', label: 'Custom Dashboards', icon: LayoutDashboard },
     { id: 'logs', label: 'Infrastructure Logs', icon: ScrollText },
     {
       id: 'alerts',

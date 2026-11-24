@@ -13,7 +13,8 @@ import { IncidentWorkspace } from './pages/IncidentWorkspace';
 import type { IncidentPreview, IncidentPreviewSummary } from './types';
 
 const NetworkDiagram = lazy(() => import('./pages/NetworkDiagram'));
-const NetworkDiagramWidget = lazy(() => import('./pages/NetworkDiagram').then(module => ({ default: module.NetworkDiagramWidget })));
+const EndpointTrace = lazy(() => import('./pages/Operations').then(module => ({default:module.EndpointTrace})));
+const CustomDashboards = lazy(() => import('./pages/Operations').then(module => ({default:module.CustomDashboards})));
 const emailSettingsHash = '#settings/email-alerts';
 const isEmailSettingsLink = () => [emailSettingsHash, '#email-alerts'].includes(window.location.hash);
 
@@ -155,7 +156,8 @@ export const AppContent: React.FC = () => {
           onNavigateToAlerts={() => setCurrentTab('alerts')}
         />
       )}
-      {tab === 'overview' && features?.network_diagram_beta && <Suspense><NetworkDiagramWidget /></Suspense>}
+      {tab === 'endpoint-trace' && admin && <Suspense fallback={<p>Loading endpoint tracing…</p>}><EndpointTrace/></Suspense>}
+      {tab === 'custom-dashboards' && admin && <Suspense fallback={<p>Loading dashboard builder…</p>}><CustomDashboards/></Suspense>}
       {tab === 'network-diagram' && admin && features?.network_diagram_beta && <Suspense><NetworkDiagram /></Suspense>}
       {tab === 'devices' && <Devices key="devices" searchQuery={searchQuery} />}
       {tab === 'discovered' && admin && <Devices key="discovered" discoveredOnly />}

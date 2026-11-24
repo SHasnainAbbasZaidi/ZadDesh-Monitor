@@ -4,6 +4,7 @@ import { Badge } from '../components/ui/Badge';
 import { EntryDetails, incidentTitle } from '../components/ui/EntryDetails';
 import { OverviewLatency } from '../components/ui/OverviewLatency';
 import { InfrastructureMonitoring } from '../components/ui/InfrastructureMonitoring';
+import { AutomaticOperationsDiagram, PinnedDashboards } from './Operations';
 import { OverviewDonuts, OverviewTiles } from '../components/ui/OverviewSummary';
 import { api, request } from '../services/api';
 import { useLiveUpdates } from '../services/live';
@@ -119,8 +120,12 @@ export function Overview({ incidents, criticalOnly, onRefreshIncidents, onNaviga
         <OverviewDonuts fleet={fleet} fleetFailed={fleetFailed} incidents={incidentData} />
       </div>
 
+      <PinnedDashboards/>
       <div className="dash-grid">
-        <InfrastructureMonitoring fleet={fleet} sites={snapshot?.sites} refresh={fleetRefresh} onNavigate={onNavigateToDevices} />
+        <section className="infrastructure-with-topology" aria-label="Infrastructure and network activity">
+          <AutomaticOperationsDiagram/>
+          <InfrastructureMonitoring fleet={fleet} sites={snapshot?.sites} refresh={fleetRefresh} onNavigate={onNavigateToDevices} />
+        </section>
 
         <div className="dash-side-stack">
           <section className="dash-panel" aria-labelledby="incident-title">
